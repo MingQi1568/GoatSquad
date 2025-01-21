@@ -2,6 +2,7 @@ import pandas as pd
 from sqlalchemy import create_engine 
 from sqlalchemy.sql import text
 import os
+import random
 
 DATABASE_URL = "postgresql+psycopg2://postgres:vibhas69@34.71.48.54:5432/user_ratings_db"
 
@@ -73,8 +74,28 @@ def get_video_url(reel_id):
     except Exception as e:
         print(f"Error fetching video URL: {e}")
         return None
+    
+def get_follow_vid(table, followed_players, followed_teams):
+    engine = create_engine(DATABASE_URL)
+    try:
+        query = text(f"""
+            SELECT url FROM {table} 
+            WHERE player = ANY(:players) OR home_team = ANY(:teams) OR away_team = ANY(:teams)
+        """)
+        with engine.connect() as connection:
+            results = connection.execute(query, {"players": followed_players, "teams": followed_teams}).fetchall()
+            if results:
+                return random.choice(results)[0]
+            print("No matching videos found")
+            return None
+    except Exception as e:
+        print(f"Error fetching random video: {e}")
+        return None
 
 if __name__ == "__main__":
-    # test connecitons 
-    load_data()
+    followed_players = ['Shohei Ohtani', 'Mike Trout']
+    followed_teams = ['Tampa Bay Rays', 'Houston Astros']
+    print(get_follow_vid('mlb_highlights', followed_players, followed_teams))
+
+
 
