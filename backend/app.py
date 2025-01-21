@@ -15,7 +15,8 @@ from google.cloud.sql.connector import Connector
 import sqlalchemy
 from werkzeug.middleware.proxy_fix import ProxyFix
 from cfknn import load_model, recommend_reels, build_and_save_model, run_main
-from db import load_data, add, remove, get_video_url
+from db import load_data, add, remove, get_video_url, get_follow_vid
+
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -244,6 +245,26 @@ def predict_recommendations():
         return jsonify({'success': True, 'recommendations': recommendations}), 200
     except Exception as e:
         logger.error(f"Error predicting recommendations: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/recommend/follow', methods=['GET'])
+def get_random_recommendation():
+    try:
+        table = request.args.get('table', default='mlb_highlights')
+        followed_players = request.args.getlist('players')
+        followed_teams = request.args.getlist('teams')
+
+        if not followed_players and not followed_teams:
+            return jsonify({'success': False, 'message': 'No players or teams provided'}), 400
+
+        video_url = get_follow_vid(table, followed_players, followed_teams)
+
+        if video_url:
+            return jsonify({'success': True, 'url': video_url}), 200
+        else:
+            return jsonify({'success': False, 'message': 'No matching videos found'}), 404
+    except Exception as e:
+        logger.error(f"Error fetching random video: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
 
 # Initialize the translation client
