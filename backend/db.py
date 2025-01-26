@@ -48,26 +48,33 @@ def remove(user_id, reel_id, table):
 
 def get_video_url(reel_id):
     engine = create_engine(DATABASE_URL)
-    # First try to get the specific video
     query = text("""
-        SELECT url FROM mlb_highlights 
+        SELECT url, title, blurb FROM mlb_highlights 
         WHERE id = :reel_id
     """)
     try:
         with engine.connect() as connection:
             result = connection.execute(query, {"reel_id": reel_id}).fetchone()
             if result:
-                return result[0]
+                return {
+                    'video_url': result[0],
+                    'title': result[1],
+                    'blurb': result[2]
+                }
             
             # If specific video not found, get any available video
             fallback_query = text("""
-                SELECT url FROM mlb_highlights 
+                SELECT url, title, blurb FROM mlb_highlights 
                 LIMIT 1
             """)
             fallback_result = connection.execute(fallback_query).fetchone()
             if fallback_result:
                 print("Using fallback video")
-                return fallback_result[0]
+                return {
+                    'video_url': fallback_result[0],
+                    'title': fallback_result[1],
+                    'blurb': fallback_result[2]
+                }
             
             print("No videos found in database")
             return None

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import PageTransition from '../components/PageTransition';
 import { useAuth } from '../contexts/AuthContext';
 import TranslatedText from '../components/TranslatedText';
@@ -112,11 +112,69 @@ function RecommendationsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [hasMore, setHasMore] = useState(true);
+  const [isModelLoaded, setIsModelLoaded] = useState(false);
+  const [followRecommendations, setFollowRecommendations] = useState([]);
+  const [modelRecommendations, setModelRecommendations] = useState([]);
 
   // -----------
   // FETCH LOGIC
   // ---------
-  const fetchRecommendations = async (pageNum) => {
+  const fetchFollowRecommendations = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        console.error('No auth token found');
+        return;
+      }
+
+      const response = await fetch(
+        `${process.env.REACT_APP_BACKEND_URL}/recommend/follow`,
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`,  // Make sure 'Bearer ' prefix is included
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        const newRecommendations = await Promise.all(data.recommendations.map(async (rec) => {
+          const videoResponse = await fetch(
+            `${process.env.REACT_APP_BACKEND_URL}/api/mlb/video?play_id=${rec.reel_id}`,
+            {
+              headers: {
+                'Authorization': `Bearer ${token}`
+              }
+            }
+          );
+          const videoData = await videoResponse.json();
+          
+          return {
+            id: rec.reel_id,
+            type: 'video',
+            title: videoData.success ? videoData.title : 'Followed Team/Player Highlight',
+            description: videoData.success ? videoData.blurb : 'Highlight from your followed teams/players',
+            videoUrl: videoData.success ? videoData.video_url : null,
+            upvotes: 0,
+            downvotes: 0,
+            comments: []
+          };
+        }));
+
+        setFollowRecommendations(newRecommendations);
+      }
+    } catch (err) {
+      console.error('Error fetching follow recommendations:', err);
+    }
+  };
+
+  const fetchModelRecommendations = async (pageNum) => {
     if (!user?.id) {
       setError('No user ID found');
       setIsLoading(false);
@@ -131,7 +189,6 @@ function RecommendationsPage() {
       const data = await response.json();
       
       if (data.success) {
-        // Transform recommendations into feed items
         const newRecommendations = await Promise.all(data.recommendations.map(async (rec) => {
           const videoResponse = await fetch(
             `${process.env.REACT_APP_BACKEND_URL}/api/mlb/video?play_id=${rec.reel_id}`
@@ -141,8 +198,8 @@ function RecommendationsPage() {
           return {
             id: rec.reel_id,
             type: 'video',
-            title: `Recommended Highlight`,
-            description: `This highlight was selected just for you with a match score of ${rec.predicted_score.toFixed(1)}`,
+            title: videoData.success ? videoData.title : 'Recommended Highlight',
+            description: videoData.success ? videoData.blurb : `This highlight was selected just for you with a match score of ${rec.predicted_score.toFixed(1)}`,
             videoUrl: videoData.success ? videoData.video_url : null,
             upvotes: Math.floor(rec.predicted_score),
             downvotes: 0,
@@ -150,8 +207,9 @@ function RecommendationsPage() {
           };
         }));
 
-        setRecommendations(prev => pageNum === 1 ? newRecommendations : [...prev, ...newRecommendations]);
+        setModelRecommendations(prev => pageNum === 1 ? newRecommendations : [...prev, ...newRecommendations]);
         setHasMore(data.has_more);
+        setIsModelLoaded(true);
       } else {
         setError('Failed to fetch recommendations');
       }
@@ -165,14 +223,35 @@ function RecommendationsPage() {
 
   // Initial load
   useEffect(() => {
-    fetchRecommendations(1);
+    fetchFollowRecommendations();
+    fetchModelRecommendations(1);
   }, [user?.id]);
+
+  // Combine recommendations
+  const combinedRecommendations = useMemo(() => {
+    if (!isModelLoaded) {
+      return followRecommendations;
+    }
+
+    const combined = [];
+    const maxLength = Math.max(followRecommendations.length, modelRecommendations.length);
+    
+    for (let i = 0; i < maxLength; i++) {
+      if (i % 2 === 0 && followRecommendations[Math.floor(i/2)]) {
+        combined.push(followRecommendations[Math.floor(i/2)]);
+      } else if (modelRecommendations[Math.floor(i/2)]) {
+        combined.push(modelRecommendations[Math.floor(i/2)]);
+      }
+    }
+    
+    return combined;
+  }, [isModelLoaded, followRecommendations, modelRecommendations]);
 
   // Infinite scroll handler
   const handleLoadMore = () => {
     if (!isLoading && hasMore) {
       setPage(prev => prev + 1);
-      fetchRecommendations(page + 1);
+      fetchModelRecommendations(page + 1);
     }
   };
 
@@ -318,7 +397,15 @@ function RecommendationsPage() {
 
           {/* MAIN FEED */}
           <main className="col-span-12 lg:col-span-6 space-y-6">
-            {recommendations.map((item) => (
+            {!isModelLoaded && (
+              <div className="bg-blue-50 dark:bg-blue-900 p-4 rounded-lg mb-4">
+                <p className="text-blue-700 dark:text-blue-200">
+                  Loading personalized recommendations... Meanwhile, enjoy highlights from your favorite teams and players!
+                </p>
+              </div>
+            )}
+            
+            {combinedRecommendations.map((item) => (
               <div
                 key={item.id}
                 className="bg-white dark:bg-gray-800 shadow rounded-lg p-4

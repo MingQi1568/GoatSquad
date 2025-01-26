@@ -16,6 +16,8 @@ import sqlalchemy
 from werkzeug.middleware.proxy_fix import ProxyFix
 from cfknn import recommend_reels, build_and_save_model, run_main
 from db import load_data, add, remove, get_video_url, get_follow_vid
+from sqlalchemy import create_engine
+from sqlalchemy.sql import text
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -257,23 +259,49 @@ def predict_recommendations():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/recommend/follow', methods=['GET'])
-def get_random_recommendation():
+@token_required
+def get_follow_recommendations(current_user):
+    """Get recommendations based on followed teams and players"""
     try:
         table = request.args.get('table', default='mlb_highlights')
-        followed_players = request.args.getlist('players')
-        followed_teams = request.args.getlist('teams')
 
-        if not followed_players and not followed_teams:
-            return jsonify({'success': False, 'message': 'No players or teams provided'}), 400
+        # Get user's followed teams and players from database
+        if not current_user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
 
-        video_url = get_follow_vid(table, followed_players, followed_teams)
+        # Extract team names and player names from the JSON objects
+        followed_teams = [team.get('name', '') for team in (current_user.followed_teams or [])]
+        followed_players = [player.get('fullName', '') for player in (current_user.followed_players or [])]
 
-        if video_url:
-            return jsonify({'success': True, 'url': video_url}), 200
-        else:
+        if not followed_teams and not followed_players:
+            return jsonify({'success': False, 'message': 'No teams or players followed'}), 400
+
+        # Get multiple videos for followed teams/players
+        engine = create_engine(init_connection_pool())
+        query = text(f"""
+            SELECT id as reel_id FROM {table} 
+            WHERE player = ANY(:players) OR home_team = ANY(:teams) OR away_team = ANY(:teams)
+            ORDER BY RANDOM()
+            LIMIT 10
+        """)
+        
+        with engine.connect() as connection:
+            results = connection.execute(query, {
+                "players": followed_players, 
+                "teams": followed_teams
+            }).fetchall()
+            
+            if results:
+                recommendations = [{"reel_id": row[0]} for row in results]
+                return jsonify({
+                    'success': True,
+                    'recommendations': recommendations
+                })
+            
             return jsonify({'success': False, 'message': 'No matching videos found'}), 404
+            
     except Exception as e:
-        logger.error(f"Error fetching random video: {str(e)}", exc_info=True)
+        logger.error(f"Error fetching follow recommendations: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
 
 # Initialize the translation client
@@ -546,20 +574,22 @@ def perform_action():
         }), 500
 
 @app.route('/api/mlb/video', methods=['GET'])
-def get_video_url_endpoint():  # Renamed to avoid conflict with imported function
-    """Get video URL from database using play ID"""
+def get_video_url_endpoint():
+    """Get video URL and metadata from database using play ID"""
     try:
         play_id = request.args.get('play_id')
         if not play_id:
             return jsonify({'success': False, 'message': 'Play ID is required'}), 400
 
-        video_url = get_video_url(play_id)  # Use imported function directly
-        if not video_url:
-            return jsonify({'success': False, 'message': 'Video URL not found'}), 404
+        video_data = get_video_url(play_id)
+        if not video_data:
+            return jsonify({'success': False, 'message': 'Video not found'}), 404
 
         return jsonify({
             'success': True,
-            'video_url': video_url
+            'video_url': video_data['video_url'],
+            'title': video_data['title'],
+            'blurb': video_data['blurb']
         })
 
     except Exception as e:

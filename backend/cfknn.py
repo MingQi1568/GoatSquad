@@ -78,6 +78,7 @@ def run_main(table, user_id=10, num_recommendations=3, offset=0, model_path='knn
 
     model_knn, user_reel_matrix_loaded = get_cached_model(model_path)
     if model_knn is None:
+        print("Model not found, building new model...")
         model_knn, user_reel_matrix_loaded = build_and_save_model(user_reel_matrix, model_path)
 
     recommendations = recommend_reels(
