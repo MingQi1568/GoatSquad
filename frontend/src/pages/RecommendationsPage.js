@@ -158,7 +158,8 @@ function RecommendationsPage() {
           };
         }));
 
-        setFollowRecommendations(prev => pageNum === 1 ? newRecommendations : [...prev, ...newRecommendations]);
+        // Always append new recommendations
+        setFollowRecommendations(prev => [...prev, ...newRecommendations]);
         setHasMore(data.has_more);
       }
     } catch (err) {
@@ -201,7 +202,8 @@ function RecommendationsPage() {
           };
         }));
 
-        setModelRecommendations(prev => pageNum === 1 ? newRecommendations : [...prev, ...newRecommendations]);
+        // Always append new recommendations
+        setModelRecommendations(prev => [...prev, ...newRecommendations]);
         setHasMore(data.has_more);
         setIsModelLoaded(true);
       } else {
@@ -222,9 +224,11 @@ function RecommendationsPage() {
     const nextPage = currentPage + 1;
     setCurrentPage(nextPage);
 
-    if (!isModelLoaded || nextPage % 2 === 0) {
-      await fetchFollowRecommendations(Math.ceil(nextPage / 2));
+    if (!isModelLoaded) {
+      // Before model loads, keep fetching followed recommendations
+      await fetchFollowRecommendations(Math.ceil(nextPage));
     } else {
+      // After model loads, only fetch model recommendations
       await fetchModelRecommendations(Math.ceil(nextPage / 2));
     }
   };
@@ -241,21 +245,19 @@ function RecommendationsPage() {
       return followRecommendations;
     }
 
-    // Interleave pages of recommendations
-    const combined = [];
-    const pageSize = 5; // Number of items per page
-    const totalPages = Math.ceil(currentPage);
+    // When model loads, keep all existing followed recommendations
+    // and start alternating with model recommendations
+    const combined = [...followRecommendations];  // Keep all followed recommendations
+    
+    // Add model recommendations after the followed recommendations
+    const modelPages = Math.floor(currentPage / 2);  // How many model pages we should show
+    const pageSize = 5;
 
-    for (let i = 0; i < totalPages; i++) {
-      if (i % 2 === 0) {
-        // Add follow recommendations page
-        const startIdx = Math.floor(i/2) * pageSize;
-        const pageItems = followRecommendations.slice(startIdx, startIdx + pageSize);
-        combined.push(...pageItems);
-      } else {
-        // Add model recommendations page
-        const startIdx = Math.floor(i/2) * pageSize;
-        const pageItems = modelRecommendations.slice(startIdx, startIdx + pageSize);
+    for (let i = 0; i < modelPages; i++) {
+      const startIdx = i * pageSize;
+      const endIdx = startIdx + pageSize;
+      const pageItems = modelRecommendations.slice(startIdx, endIdx);
+      if (pageItems.length > 0) {
         combined.push(...pageItems);
       }
     }
