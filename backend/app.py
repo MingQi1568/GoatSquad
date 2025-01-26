@@ -191,10 +191,10 @@ def get_highlights():
         logger.error(f"Error fetching highlights: {str(e)}", exc_info=True)
         return {'error': 'Failed to fetch highlights'}, 500
 
-@app.route('/recommend/add', methods=['POST'])
+@app.route('/recommend/add', methods=['POST', 'GET'])
 def add_rating():
+    """Add or update a user's rating for a reel"""
     try:
-        # Scrape data from query arguments instead of JSON payload
         user_id = request.args.get('user_id')
         reel_id = request.args.get('reel_id')
         rating = request.args.get('rating')
@@ -203,7 +203,13 @@ def add_rating():
         if not all([user_id, reel_id, rating]):
             return jsonify({'success': False, 'message': 'Missing required fields'}), 400
 
-        rating = float(rating)
+        try:
+            rating = float(rating)
+            if not (0 <= rating <= 5):
+                return jsonify({'success': False, 'message': 'Rating must be between 0 and 5'}), 400
+        except ValueError:
+            return jsonify({'success': False, 'message': 'Invalid rating value'}), 400
+
         add(user_id, reel_id, rating, table)
         return jsonify({'success': True, 'message': 'Rating added successfully'}), 200
     except Exception as e:

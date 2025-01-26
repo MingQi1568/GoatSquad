@@ -29,7 +29,7 @@ def add(user_id, reel_id, rating, table):
     try: 
         with engine.connect() as connection: 
             data.to_sql(table, connection, if_exists='append', index=False)
-            print("Success with injecting data")
+            print("Success with injecting data " + str(user_id) + " " + str(reel_id) + " " + str(rating) + " into " + str(table))
     except Exception as e:
         print(f"faliure adding: {e}")
 

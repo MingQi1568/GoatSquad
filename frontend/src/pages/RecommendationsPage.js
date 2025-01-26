@@ -120,6 +120,10 @@ function RecommendationsPage() {
   const [followHasMore, setFollowHasMore] = useState(true);
   const [modelHasMore, setModelHasMore] = useState(true);
 
+  // Add these state variables at the top with other states
+  const [viewTimes, setViewTimes] = useState({});
+  const [lastSubmittedRating, setLastSubmittedRating] = useState({});
+
   // -----------
   // FETCH LOGIC
   // ---------
@@ -376,6 +380,60 @@ function RecommendationsPage() {
     setNewComment('');
   };
 
+  // Add this function to calculate rating based on view time
+  const calculateRating = (viewTime, duration) => {
+    if (!viewTime || !duration) return 0;
+    const percentage = viewTime / duration;
+    if (percentage >= 0.9) return 5;
+    if (percentage >= 0.7) return 4;
+    if (percentage >= 0.5) return 3;
+    if (percentage >= 0.3) return 2;
+    if (percentage > 0) return 1;
+    return 0;
+  };
+
+  // Add function to submit rating
+  const submitRating = async (reelId, rating) => {
+    if (!user?.id || lastSubmittedRating[reelId]) return;
+    
+    try {
+      const response = await fetch(
+        `${process.env.REACT_APP_BACKEND_URL}/recommend/add?user_id=${user.id}&reel_id=${reelId}&rating=${rating}&table=user_ratings_db`
+      );
+      if (response.ok) {
+        setLastSubmittedRating(prev => ({...prev, [reelId]: true}));
+      }
+    } catch (error) {
+      console.error('Error submitting rating:', error);
+    }
+  };
+
+  // Add these handlers for video events
+  const handleTimeUpdate = (itemId, event) => {
+    const video = event.target;
+    setViewTimes(prev => ({
+      ...prev,
+      [itemId]: {
+        viewTime: (prev[itemId]?.viewTime || 0) + 0.25, // Update every quarter second
+        duration: video.duration
+      }
+    }));
+  };
+
+  const handleVideoEnd = (itemId) => {
+    if (viewTimes[itemId]) {
+      const rating = calculateRating(viewTimes[itemId].viewTime, viewTimes[itemId].duration);
+      submitRating(itemId, rating);
+    }
+  };
+
+  const handleVideoSwitch = (currentItemId) => {
+    if (viewTimes[currentItemId]) {
+      const rating = calculateRating(viewTimes[currentItemId].viewTime, viewTimes[currentItemId].duration);
+      submitRating(currentItemId, rating);
+    }
+  };
+
   return (
     <PageTransition>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 mt-16">
@@ -463,6 +521,9 @@ function RecommendationsPage() {
                       controls
                       className="w-full rounded-lg"
                       poster="https://via.placeholder.com/768x432.png?text=Video+Placeholder"
+                      onTimeUpdate={(e) => handleTimeUpdate(item.id, e)}
+                      onEnded={() => handleVideoEnd(item.id)}
+                      onPlay={() => handleVideoSwitch(item.id)}
                     >
                       <source src={item.videoUrl} type="video/mp4" />
                       Your browser does not support the video tag.
