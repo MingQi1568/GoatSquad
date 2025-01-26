@@ -115,32 +115,23 @@ function RecommendationsPage() {
   const [isModelLoaded, setIsModelLoaded] = useState(false);
   const [followRecommendations, setFollowRecommendations] = useState([]);
   const [modelRecommendations, setModelRecommendations] = useState([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
 
   // -----------
   // FETCH LOGIC
   // ---------
-  const fetchFollowRecommendations = async () => {
+  const fetchFollowRecommendations = async (pageNum) => {
     try {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        console.error('No auth token found');
-        return;
-      }
-
+      setIsLoadingMore(true);
       const response = await fetch(
-        `${process.env.REACT_APP_BACKEND_URL}/recommend/follow`,
+        `${process.env.REACT_APP_BACKEND_URL}/recommend/follow?page=${pageNum}`,
         {
           headers: {
-            'Authorization': `Bearer ${token}`,  // Make sure 'Bearer ' prefix is included
-            'Content-Type': 'application/json'
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
           }
         }
       );
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      
       const data = await response.json();
       
       if (data.success) {
@@ -149,7 +140,7 @@ function RecommendationsPage() {
             `${process.env.REACT_APP_BACKEND_URL}/api/mlb/video?play_id=${rec.reel_id}`,
             {
               headers: {
-                'Authorization': `Bearer ${token}`
+                'Authorization': `Bearer ${localStorage.getItem('token')}`
               }
             }
           );
@@ -167,10 +158,13 @@ function RecommendationsPage() {
           };
         }));
 
-        setFollowRecommendations(newRecommendations);
+        setFollowRecommendations(prev => pageNum === 1 ? newRecommendations : [...prev, ...newRecommendations]);
+        setHasMore(data.has_more);
       }
     } catch (err) {
       console.error('Error fetching follow recommendations:', err);
+    } finally {
+      setIsLoadingMore(false);
     }
   };
 
@@ -221,9 +215,23 @@ function RecommendationsPage() {
     }
   };
 
+  // Handle infinite scroll
+  const handleLoadMore = async () => {
+    if (isLoadingMore || !hasMore) return;
+
+    const nextPage = currentPage + 1;
+    setCurrentPage(nextPage);
+
+    if (!isModelLoaded || nextPage % 2 === 0) {
+      await fetchFollowRecommendations(Math.ceil(nextPage / 2));
+    } else {
+      await fetchModelRecommendations(Math.ceil(nextPage / 2));
+    }
+  };
+
   // Initial load
   useEffect(() => {
-    fetchFollowRecommendations();
+    fetchFollowRecommendations(1);
     fetchModelRecommendations(1);
   }, [user?.id]);
 
@@ -233,27 +241,27 @@ function RecommendationsPage() {
       return followRecommendations;
     }
 
+    // Interleave pages of recommendations
     const combined = [];
-    const maxLength = Math.max(followRecommendations.length, modelRecommendations.length);
-    
-    for (let i = 0; i < maxLength; i++) {
-      if (i % 2 === 0 && followRecommendations[Math.floor(i/2)]) {
-        combined.push(followRecommendations[Math.floor(i/2)]);
-      } else if (modelRecommendations[Math.floor(i/2)]) {
-        combined.push(modelRecommendations[Math.floor(i/2)]);
+    const pageSize = 5; // Number of items per page
+    const totalPages = Math.ceil(currentPage);
+
+    for (let i = 0; i < totalPages; i++) {
+      if (i % 2 === 0) {
+        // Add follow recommendations page
+        const startIdx = Math.floor(i/2) * pageSize;
+        const pageItems = followRecommendations.slice(startIdx, startIdx + pageSize);
+        combined.push(...pageItems);
+      } else {
+        // Add model recommendations page
+        const startIdx = Math.floor(i/2) * pageSize;
+        const pageItems = modelRecommendations.slice(startIdx, startIdx + pageSize);
+        combined.push(...pageItems);
       }
     }
     
     return combined;
-  }, [isModelLoaded, followRecommendations, modelRecommendations]);
-
-  // Infinite scroll handler
-  const handleLoadMore = () => {
-    if (!isLoading && hasMore) {
-      setPage(prev => prev + 1);
-      fetchModelRecommendations(page + 1);
-    }
-  };
+  }, [isModelLoaded, followRecommendations, modelRecommendations, currentPage]);
 
   // Intersection Observer setup
   const observerRef = useRef(null);

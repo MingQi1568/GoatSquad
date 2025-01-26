@@ -264,6 +264,8 @@ def get_follow_recommendations(current_user):
     """Get recommendations based on followed teams and players"""
     try:
         table = request.args.get('table', default='mlb_highlights')
+        page = int(request.args.get('page', default=1))
+        per_page = int(request.args.get('per_page', default=5))
 
         # Get user's followed teams and players from database
         if not current_user:
@@ -276,26 +278,34 @@ def get_follow_recommendations(current_user):
         if not followed_teams and not followed_players:
             return jsonify({'success': False, 'message': 'No teams or players followed'}), 400
 
-        # Get multiple videos for followed teams/players
+        # Calculate offset for pagination
+        offset = (page - 1) * per_page
+
+        # Get multiple videos for followed teams/players with pagination
         engine = create_engine(init_connection_pool())
         query = text(f"""
             SELECT id as reel_id FROM {table} 
             WHERE player = ANY(:players) OR home_team = ANY(:teams) OR away_team = ANY(:teams)
             ORDER BY RANDOM()
-            LIMIT 10
+            OFFSET :offset
+            LIMIT :limit
         """)
         
         with engine.connect() as connection:
             results = connection.execute(query, {
                 "players": followed_players, 
-                "teams": followed_teams
+                "teams": followed_teams,
+                "offset": offset,
+                "limit": per_page + 1  # Get one extra to check if there are more
             }).fetchall()
             
             if results:
-                recommendations = [{"reel_id": row[0]} for row in results]
+                has_more = len(results) > per_page
+                recommendations = [{"reel_id": row[0]} for row in results[:per_page]]
                 return jsonify({
                     'success': True,
-                    'recommendations': recommendations
+                    'recommendations': recommendations,
+                    'has_more': has_more
                 })
             
             return jsonify({'success': False, 'message': 'No matching videos found'}), 404
