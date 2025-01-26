@@ -117,6 +117,8 @@ function RecommendationsPage() {
   const [modelRecommendations, setModelRecommendations] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [followHasMore, setFollowHasMore] = useState(true);
+  const [modelHasMore, setModelHasMore] = useState(true);
 
   // -----------
   // FETCH LOGIC
@@ -158,9 +160,8 @@ function RecommendationsPage() {
           };
         }));
 
-        // Always append new recommendations
         setFollowRecommendations(prev => [...prev, ...newRecommendations]);
-        setHasMore(data.has_more);
+        setFollowHasMore(data.has_more);
       }
     } catch (err) {
       console.error('Error fetching follow recommendations:', err);
@@ -170,11 +171,7 @@ function RecommendationsPage() {
   };
 
   const fetchModelRecommendations = async (pageNum) => {
-    if (!user?.id) {
-      setError('No user ID found');
-      setIsLoading(false);
-      return;
-    }
+    if (!user?.id) return;
 
     try {
       setIsLoading(true);
@@ -183,35 +180,46 @@ function RecommendationsPage() {
       );
       const data = await response.json();
       
-      if (data.success) {
+      if (data.success && data.recommendations?.length > 0) {
         const newRecommendations = await Promise.all(data.recommendations.map(async (rec) => {
-          const videoResponse = await fetch(
-            `${process.env.REACT_APP_BACKEND_URL}/api/mlb/video?play_id=${rec.reel_id}`
-          );
-          const videoData = await videoResponse.json();
-          
-          return {
-            id: rec.reel_id,
-            type: 'video',
-            title: videoData.success ? videoData.title : 'Recommended Highlight',
-            description: videoData.success ? videoData.blurb : `This highlight was selected just for you with a match score of ${rec.predicted_score.toFixed(1)}`,
-            videoUrl: videoData.success ? videoData.video_url : null,
-            upvotes: Math.floor(rec.predicted_score),
-            downvotes: 0,
-            comments: []
-          };
+          if (!rec.reel_id) return null;
+
+          try {
+            const videoResponse = await fetch(
+              `${process.env.REACT_APP_BACKEND_URL}/api/mlb/video?play_id=${rec.reel_id}`
+            );
+            const videoData = await videoResponse.json();
+            
+            if (!videoData.success) return null;
+            
+            return {
+              id: rec.reel_id,
+              type: 'video',
+              title: videoData.title,
+              description: videoData.blurb,
+              videoUrl: videoData.video_url,
+              upvotes: Math.floor(rec.predicted_score),
+              downvotes: 0,
+              comments: []
+            };
+          } catch (err) {
+            return null;
+          }
         }));
 
-        // Always append new recommendations
-        setModelRecommendations(prev => [...prev, ...newRecommendations]);
-        setHasMore(data.has_more);
-        setIsModelLoaded(true);
+        const validRecommendations = newRecommendations.filter(rec => rec !== null);
+        if (validRecommendations.length > 0) {
+          setModelRecommendations(prev => [...prev, ...validRecommendations]);
+          setModelHasMore(data.has_more);
+          setIsModelLoaded(true);
+        } else {
+          setModelHasMore(false);
+        }
       } else {
-        setError('Failed to fetch recommendations');
+        setModelHasMore(false);
       }
     } catch (err) {
-      setError(err.message);
-      console.error('Error fetching recommendations:', err);
+      setModelHasMore(false);
     } finally {
       setIsLoading(false);
     }
@@ -219,19 +227,30 @@ function RecommendationsPage() {
 
   // Handle infinite scroll
   const handleLoadMore = async () => {
-    if (isLoadingMore || !hasMore) return;
+    if (isLoadingMore) return;
 
     const nextPage = currentPage + 1;
-    setCurrentPage(nextPage);
+    try {
+      setIsLoadingMore(true);
+      const isEvenPage = nextPage % 2 === 0;
+      const pageNumber = Math.ceil(nextPage / 2);
 
-    if (!isModelLoaded) {
-      // Before model loads, keep fetching followed recommendations
-      await fetchFollowRecommendations(Math.ceil(nextPage));
-    } else {
-      // After model loads, only fetch model recommendations
-      await fetchModelRecommendations(Math.ceil(nextPage / 2));
+      if (isEvenPage) {
+        await fetchFollowRecommendations(pageNumber);
+        setCurrentPage(nextPage);
+      } else {
+        setCurrentPage(nextPage);
+        await fetchModelRecommendations(pageNumber);
+      }
+    } finally {
+      setIsLoadingMore(false);
     }
   };
+
+  useEffect(() => {
+    // Update the combined hasMore state based on both sources
+    setHasMore(followHasMore || modelHasMore);
+  }, [followHasMore, modelHasMore]);
 
   // Initial load
   useEffect(() => {
@@ -246,19 +265,27 @@ function RecommendationsPage() {
     }
 
     // When model loads, keep all existing followed recommendations
-    // and start alternating with model recommendations
-    const combined = [...followRecommendations];  // Keep all followed recommendations
-    
-    // Add model recommendations after the followed recommendations
-    const modelPages = Math.floor(currentPage / 2);  // How many model pages we should show
+    // and alternate with model recommendations
+    const combined = [];
     const pageSize = 5;
+    const totalPages = Math.ceil(currentPage);
 
-    for (let i = 0; i < modelPages; i++) {
-      const startIdx = i * pageSize;
+    for (let i = 0; i < totalPages; i++) {
+      const startIdx = Math.floor(i/2) * pageSize;
       const endIdx = startIdx + pageSize;
-      const pageItems = modelRecommendations.slice(startIdx, endIdx);
-      if (pageItems.length > 0) {
-        combined.push(...pageItems);
+      
+      if (i % 2 === 0) {
+        // Add follow recommendations page
+        const pageItems = followRecommendations.slice(startIdx, endIdx);
+        if (pageItems.length > 0) {
+          combined.push(...pageItems);
+        }
+      } else {
+        // Add model recommendations page if they're loaded
+        const modelItems = modelRecommendations.slice(startIdx, endIdx);
+        if (modelItems.length > 0) {
+          combined.push(...modelItems);
+        }
       }
     }
     
@@ -270,29 +297,29 @@ function RecommendationsPage() {
   const sentinelRef = useRef(null);
 
   useEffect(() => {
-    if (observerRef.current) {
-      observerRef.current.disconnect();
-    }
+    const options = {
+      root: null,
+      rootMargin: '200px',
+      threshold: 0.1
+    };
 
-    observerRef.current = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting && !isLoading && hasMore) {
-          handleLoadMore();
-        }
-      },
-      { rootMargin: '200px' }
-    );
+    const observer = new IntersectionObserver((entries) => {
+      const [entry] = entries;
+      if (entry.isIntersecting && !isLoadingMore && hasMore) {
+        handleLoadMore();
+      }
+    }, options);
 
     if (sentinelRef.current) {
-      observerRef.current.observe(sentinelRef.current);
+      observer.observe(sentinelRef.current);
     }
 
     return () => {
-      if (observerRef.current) {
-        observerRef.current.disconnect();
+      if (sentinelRef.current) {
+        observer.unobserve(sentinelRef.current);
       }
     };
-  }, [isLoading, hasMore]);
+  }, [isLoadingMore, hasMore, currentPage]);
 
   // -----------
   // VOTING LOGIC
@@ -502,25 +529,14 @@ function RecommendationsPage() {
             ))}
 
             {/* Loading indicator */}
-            {isLoading && (
+            {isLoadingMore && (
               <div className="text-center py-4">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900 mx-auto"></div>
-                <p className="mt-2 text-gray-600">Loading more recommendations...</p>
+                <p className="text-gray-600 dark:text-gray-400">Loading more content...</p>
               </div>
             )}
 
-            {/* Error message */}
-            {error && (
-              <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative">
-                <strong className="font-bold">Error!</strong>
-                <span className="block sm:inline"> {error}</span>
-              </div>
-            )}
-
-            {/* Infinite scroll sentinel */}
-            <div ref={sentinelRef} className="py-4 text-center text-gray-500">
-              {hasMore ? 'Loading more...' : 'No more recommendations'}
-            </div>
+            {/* Sentinel element for infinite scroll */}
+            <div ref={sentinelRef} className="h-10" />
           </main>
 
           {/* RIGHT SIDEBAR */}

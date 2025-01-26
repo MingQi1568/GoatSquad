@@ -228,34 +228,28 @@ def remove_rating():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/recommend/predict', methods=['GET'])
-def predict_recommendations():
-    """Get reel recommendations for a user"""
+def get_model_recommendations():
+    """Get recommendations from the model"""
     try:
-        user_id = int(request.args.get('user_id', default=0))
+        user_id = int(request.args.get('user_id'))
         page = int(request.args.get('page', default=1))
         per_page = int(request.args.get('per_page', default=5))
         table = request.args.get('table', default='user_ratings_db')
-
-        # Calculate offset based on page number
-        offset = (page - 1) * per_page
         
-        # Run the model with pagination
-        recommendations = run_main(
-            table=table,
-            user_id=user_id,
-            num_recommendations=per_page,
-            offset=offset,
-            model_path='knn_model.pkl'
-        )
-
-        return jsonify({
-            'success': True, 
-            'recommendations': recommendations,
-            'page': page,
-            'has_more': len(recommendations) == per_page  # True if there might be more results
-        }), 200
+        offset = (page - 1) * per_page
+        recommendations, has_more = run_main(table, user_id=user_id, num_recommendations=per_page, offset=offset)
+        
+        if recommendations:
+            return jsonify({
+                'success': True,
+                'recommendations': recommendations,
+                'has_more': has_more
+            })
+        
+        return jsonify({'success': False, 'message': 'No recommendations found'}), 404
+        
     except Exception as e:
-        logger.error(f"Error predicting recommendations: {str(e)}", exc_info=True)
+        logger.error(f"Error getting model recommendations: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/recommend/follow', methods=['GET'])

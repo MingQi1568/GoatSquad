@@ -51,24 +51,42 @@ def get_cached_model(model_path='knn_model.pkl'):
         return _cached_model, _cached_matrix
 
 def recommend_reels(user_id, model_knn, user_reel_matrix, num_recommendations=5, offset=0):
-    user_index = user_id - 1
-    distances, indices = model_knn.kneighbors(
-        user_reel_matrix.iloc[user_index, :].values.reshape(1, -1), 
-        n_neighbors=20  # Get more neighbors to support pagination
-    )
-    similar_users = indices.flatten()
-    reel_scores = {}
+    """Get recommendations for a user"""
+    try:
+        print(f"Recommending reels for user {user_id}, offset: {offset}, limit: {num_recommendations}")
+        user_index = user_reel_matrix.index.get_loc(user_id)
+        
+        # Get similar users
+        distances, indices = model_knn.kneighbors(
+            user_reel_matrix.iloc[user_index, :].values.reshape(1, -1),
+            n_neighbors=20  # Increased for more recommendations
+        )
+        
+        # Calculate scores for all reels
+        reel_scores = {}
+        for i in indices[0]:
+            if i == user_index:
+                continue
+            for reel_id in user_reel_matrix.columns:
+                if user_reel_matrix.iloc[user_index][reel_id] == 0:
+                    reel_scores[reel_id] = reel_scores.get(reel_id, 0) + user_reel_matrix.iloc[i][reel_id]
 
-    for i in similar_users:
-        for reel_id in user_reel_matrix.columns:
-            if user_reel_matrix.iloc[user_index][reel_id] == 0:
-                reel_scores[reel_id] = reel_scores.get(reel_id, 0) + user_reel_matrix.iloc[i][reel_id]
-
-    recommended_reels = sorted(reel_scores.items(), key=lambda x: x[1], reverse=True)
-    # Apply pagination
-    paginated_reels = recommended_reels[offset:offset + num_recommendations]
-    
-    return [{"reel_id": reel_id, "predicted_score": score} for reel_id, score in paginated_reels]
+        # Sort recommendations by score
+        recommended_reels = sorted(reel_scores.items(), key=lambda x: x[1], reverse=True)
+        
+        # Apply pagination
+        start_idx = offset
+        end_idx = min(offset + num_recommendations, len(recommended_reels))
+        paginated_reels = recommended_reels[start_idx:end_idx]
+        
+        has_more = end_idx < len(recommended_reels)
+        print(f"Found {len(recommended_reels)} total recommendations, returning {len(paginated_reels)} items, has_more: {has_more}")
+        
+        return [{"reel_id": reel_id, "predicted_score": score} for reel_id, score in paginated_reels], has_more
+        
+    except Exception as e:
+        print(f"Error in recommend_reels: {str(e)}")
+        return [], False
 
 def run_main(table, user_id=10, num_recommendations=3, offset=0, model_path='knn_model.pkl'):
     ratings = load_data(table)
@@ -81,13 +99,13 @@ def run_main(table, user_id=10, num_recommendations=3, offset=0, model_path='knn
         print("Model not found, building new model...")
         model_knn, user_reel_matrix_loaded = build_and_save_model(user_reel_matrix, model_path)
 
-    recommendations = recommend_reels(
+    recommendations, has_more = recommend_reels(
         user_id, 
         model_knn, 
         user_reel_matrix_loaded, 
         num_recommendations,
         offset
     )
-    return recommendations
+    return recommendations, has_more
 
 #run_main(table)
