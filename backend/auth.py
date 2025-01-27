@@ -48,9 +48,9 @@ class User(db.Model):
 
     @staticmethod
     def generate_unique_id():
-        """Generate a unique client ID between 1 and 1,000,000"""
+        """Generate a unique client ID between 1 and 10_000"""
         while True:
-            new_id = random.randint(1, 1_000_000)
+            new_id = random.randint(1, 10_000)
             # Check if this ID already exists
             if not User.query.filter_by(client_id=new_id).first():
                 return new_id
