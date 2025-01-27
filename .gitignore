@@ -265,6 +265,11 @@ output/
 backend/.env
 frontend/.env
 *.json
+
+# Databases
+mlb_highlights_2019-2024.csv
+mlb_highlights_2019-2024_players.csv
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

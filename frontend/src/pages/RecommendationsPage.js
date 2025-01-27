@@ -176,9 +176,7 @@ function RecommendationsPage() {
             return {
               id: rec.reel_id,
               type: "video",
-              title: videoData.success
-                ? videoData.title
-                : "Followed Team/Player Highlight",
+              title: videoData.success ? `${videoData.title} (follow)` : 'Followed Team/Player Highlight',
               description: videoData.success
                 ? generatedDescription
                 : "Highlight from your followed teams/players",
@@ -229,7 +227,7 @@ function RecommendationsPage() {
               return {
                 id: rec.reel_id,
                 type: "video",
-                title: videoData.title,
+                title: `${videoData.title} (model)`,
                 description: generatedDescription,
                 videoUrl: videoData.video_url,
                 upvotes: Math.floor(rec.predicted_score),

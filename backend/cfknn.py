@@ -55,6 +55,8 @@ def recommend_reels(user_id, model_knn, user_reel_matrix, num_recommendations=5,
     try:
         print(f"Recommending reels for user {user_id}, offset: {offset}, limit: {num_recommendations}")
         user_index = user_reel_matrix.index.get_loc(user_id)
+
+        print(user_id)
         
         # Get similar users
         distances, indices = model_knn.kneighbors(
