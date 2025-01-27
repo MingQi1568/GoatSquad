@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 
 db = SQLAlchemy()
 
+# At the top after imports
+print("10. Auth.py imported, directory:", os.getcwd())
+
 class User(db.Model):
     __tablename__ = 'client_info'  # Your existing table name
     
@@ -45,9 +48,9 @@ class User(db.Model):
 
     @staticmethod
     def generate_unique_id():
-        """Generate a unique client ID between 1 and 1,000,000"""
+        """Generate a unique client ID between 1 and 10_000"""
         while True:
-            new_id = random.randint(1, 1_000_000)
+            new_id = random.randint(1, 10_000)
             # Check if this ID already exists
             if not User.query.filter_by(client_id=new_id).first():
                 return new_id
@@ -74,7 +77,8 @@ def token_required(f):
             return jsonify({'success': False, 'message': 'Token is missing'}), 401
 
         try:
-            data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+            # Add verify_exp=False to disable expiration checking
+            data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"], options={"verify_exp": False})
             current_user = User.query.filter_by(client_id=data['user_id']).first()
             
             if current_user is None:
@@ -121,8 +125,7 @@ class AuthService:
             db.session.commit()
 
             token = jwt.encode({
-                'user_id': new_user.client_id,
-                'exp': datetime.now(timezone.utc) + timedelta(days=1)
+                'user_id': new_user.client_id
             }, SECRET_KEY, algorithm="HS256")
 
             return {
@@ -160,9 +163,9 @@ class AuthService:
                 logger.warning(f"Invalid password for user: {email}")
                 return {'success': False, 'message': 'Invalid email or password'}, 401
 
+            # Token without expiration
             token = jwt.encode({
-                'user_id': user.client_id,
-                'exp': datetime.now(timezone.utc) + timedelta(days=1)
+                'user_id': user.client_id
             }, SECRET_KEY, algorithm="HS256")
 
             logger.info(f"Login successful for user: {email}")

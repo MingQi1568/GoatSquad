@@ -14,14 +14,15 @@ from flask_migrate import Migrate
 from google.cloud.sql.connector import Connector
 import sqlalchemy
 from werkzeug.middleware.proxy_fix import ProxyFix
-from cfknn import load_model, recommend_reels, build_and_save_model, run_main
-from db import load_data, add, remove
+from cfknn import recommend_reels, build_and_save_model, run_main
+from db import load_data, add, remove, get_video_url, get_follow_vid
+from sqlalchemy import create_engine
+from sqlalchemy.sql import text
+from gemini import run_gemini_prompt
+import re
 
-# Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-print("1. App.py starting directory:", os.getcwd())
 
 ORIGINAL_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -31,13 +32,11 @@ def init_connection_pool():
     db_pass = os.getenv("DB_PASS")
     db_name = os.getenv("DB_NAME")
     
-    # Connect through Cloud SQL Proxy
     DATABASE_URL = f"postgresql://{db_user}:{db_pass}@34.71.48.54:5432/{db_name}"
     return DATABASE_URL
 
 app = Flask(__name__)
 
-# Add the before_request handler AFTER app creation
 @app.before_request
 def before_request():
     os.chdir(ORIGINAL_DIR)
@@ -49,7 +48,6 @@ app.config['SQLALCHEMY_DATABASE_URI'] = init_connection_pool()
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Initialize extensions
 db.init_app(app)
 print("11. Before Flask app creation:", os.getcwd())
 current_dir = os.getcwd()
@@ -57,10 +55,8 @@ print("11. Before Flask app creation:", os.getcwd())
 print(current_dir)
 migrate = Migrate(app, db)
 
-# Create tables and initialize admin user
 with app.app_context():
     try:
-        # Create tables only if they don't exist
         db.create_all()
         # Initialize admin user
         init_admin()
@@ -142,9 +138,7 @@ def get_highlights():
         schedule_data = schedule_response.json()
 
         all_highlights = []
-        
-        # Process each date's games
-        for date in schedule_data.get('dates', [])[:10]:  # Look at last 10 days to find more highlights
+        for date in schedule_data.get('dates', [])[:10]:  
             for game in date.get('games', []):
                 game_pk = game.get('gamePk')
                 
@@ -174,7 +168,6 @@ def get_highlights():
                                 'timestamp': highlight.get('date', date.get('date'))  # Use highlight date if available
                             })
 
-        # Sort highlights by date (newest first) and take the 5 most recent
         sorted_highlights = sorted(
             all_highlights,
             key=lambda x: datetime.strptime(x['date'], '%Y-%m-%d') if x['date'] else datetime.min,
@@ -191,10 +184,10 @@ def get_highlights():
         logger.error(f"Error fetching highlights: {str(e)}", exc_info=True)
         return {'error': 'Failed to fetch highlights'}, 500
 
-@app.route('/recommend/add', methods=['POST'])
+@app.route('/recommend/add', methods=['POST', 'GET'])
 def add_rating():
+    """Add or update a user's rating for a reel"""
     try:
-        # Scrape data from query arguments instead of JSON payload
         user_id = request.args.get('user_id')
         reel_id = request.args.get('reel_id')
         rating = request.args.get('rating')
@@ -203,7 +196,13 @@ def add_rating():
         if not all([user_id, reel_id, rating]):
             return jsonify({'success': False, 'message': 'Missing required fields'}), 400
 
-        rating = float(rating)
+        try:
+            rating = float(rating)
+            if not (0 <= rating <= 5):
+                return jsonify({'success': False, 'message': 'Rating must be between 0 and 5'}), 400
+        except ValueError:
+            return jsonify({'success': False, 'message': 'Invalid rating value'}), 400
+
         add(user_id, reel_id, rating, table)
         return jsonify({'success': True, 'message': 'Rating added successfully'}), 200
     except Exception as e:
@@ -228,25 +227,119 @@ def remove_rating():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/recommend/predict', methods=['GET'])
-def predict_recommendations():
-    """Get reel recommendations for a user"""
+def get_model_recommendations():
+    """Get recommendations from the model"""
     try:
-        id = int(request.args.get('user_id', default=0))  
-        num_recs = int(request.args.get('num_recommendations', default=5))  
-        table = request.args.get('table', default='user_ratings_db')  
-
-        # Run the model
-        recommendations = run_main(
-            table=table,
-            user_id=id,
-            num_recommendations=num_recs,
-            model_path='knn_model_sql.pkl'
-        )
-
-        return jsonify({'success': True, 'recommendations': recommendations}), 200
+        user_id = int(request.args.get('user_id'))
+        page = int(request.args.get('page', default=1))
+        per_page = int(request.args.get('per_page', default=5))
+        table = request.args.get('table', default='user_ratings_db')
+        
+        offset = (page - 1) * per_page
+        recommendations, has_more = run_main(table, user_id=user_id, num_recommendations=per_page, offset=offset)
+        
+        if recommendations:
+            return jsonify({
+                'success': True,
+                'recommendations': recommendations,
+                'has_more': has_more
+            })
+        
+        return jsonify({'success': False, 'message': 'No recommendations found'}), 404
+        
     except Exception as e:
-        logger.error(f"Error predicting recommendations: {str(e)}", exc_info=True)
+        logger.error(f"Error getting model recommendations: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/recommend/follow', methods=['GET'])
+@token_required
+def get_follow_recommendations(current_user):
+    """Get recommendations based on followed teams and players"""
+    try:
+        table = request.args.get('table', default='mlb_highlights')
+        page = int(request.args.get('page', default=1))
+        per_page = int(request.args.get('per_page', default=5))
+
+        # Get user's followed teams and players from database
+        if not current_user:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+
+        # Extract team names and player names from the JSON objects
+        followed_teams = [team.get('name', '') for team in (current_user.followed_teams or [])]
+        followed_players = [player.get('fullName', '') for player in (current_user.followed_players or [])]
+
+        if not followed_teams and not followed_players:
+            return jsonify({'success': False, 'message': 'No teams or players followed'}), 400
+
+        # Calculate offset for pagination
+        offset = (page - 1) * per_page
+
+        # Get multiple videos for followed teams/players with pagination
+        engine = create_engine(init_connection_pool())
+        query = text(f"""
+            SELECT id as reel_id FROM {table} 
+            WHERE player = ANY(:players) OR home_team = ANY(:teams) OR away_team = ANY(:teams)
+            ORDER BY RANDOM()
+            OFFSET :offset
+            LIMIT :limit
+        """)
+        
+        with engine.connect() as connection:
+            results = connection.execute(query, {
+                "players": followed_players, 
+                "teams": followed_teams,
+                "offset": offset,
+                "limit": per_page + 1  # Get one extra to check if there are more
+            }).fetchall()
+            
+            if results:
+                has_more = len(results) > per_page
+                recommendations = [{"reel_id": row[0]} for row in results[:per_page]]
+                return jsonify({
+                    'success': True,
+                    'recommendations': recommendations,
+                    'has_more': has_more
+                })
+            
+            return jsonify({'success': False, 'message': 'No matching videos found'}), 404
+            
+    except Exception as e:
+        logger.error(f"Error fetching follow recommendations: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/generate-blurb', methods=['POST'])
+def generate_blurb():
+    data = request.json
+    title = data.get('title')
+
+    if not title:
+        logger.error("Title is required in the request.")
+        return jsonify({"success": False, "message": "Title is required"}), 400
+
+    title = re.sub(r"\s*\([^)]*\)$", "", title)
+
+    try:
+        prompt = f"Generate a short and engaging description for the baseball video titled: {title}. Keep your response to under 20 words. Your response should start with the content and just one sentence. Do not include filler like OK, here is a short and engaging description."
+        description = run_gemini_prompt(prompt)
+        if ':' in description:
+            description = description.split(':', 1)[1].strip()
+        if description:
+            return jsonify({
+                "success": True,
+                "description": description
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "message": "Failed to generate description"
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Error in generating description: {str(e)}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": "Internal server error"
+        }), 500
 
 # Initialize the translation client
 translate_client = translate.Client()
@@ -498,7 +591,7 @@ def perform_action():
         table = 'user_ratings_db'  # Default table
         
         # Run the model
-        recommendations = run_main(table, user_id=user_id, num_recommendations=num_recommendations, model_path='knn_model_sql.pkl')
+        recommendations = run_main(table, user_id=user_id, num_recommendations=num_recommendations, model_path='knn_model.pkl')
         
         return jsonify({
             'success': True,
@@ -516,6 +609,29 @@ def perform_action():
             'success': False,
             'message': str(e)
         }), 500
+
+@app.route('/api/mlb/video', methods=['GET'])
+def get_video_url_endpoint():
+    """Get video URL and metadata from database using play ID"""
+    try:
+        play_id = request.args.get('play_id')
+        if not play_id:
+            return jsonify({'success': False, 'message': 'Play ID is required'}), 400
+
+        video_data = get_video_url(play_id)
+        if not video_data:
+            return jsonify({'success': False, 'message': 'Video not found'}), 404
+
+        return jsonify({
+            'success': True,
+            'video_url': video_data['video_url'],
+            'title': video_data['title'],
+            'blurb': video_data['blurb']
+        })
+
+    except Exception as e:
+        logger.error(f"Error fetching video URL: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(
