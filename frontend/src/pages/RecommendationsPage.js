@@ -77,15 +77,12 @@ function generateMockPosts(page = 1) {
 }
 
 function RecommendationsPage() {
-  // Left sidebar placeholders
-  const followedTeams = [
-    { id: 1, name: 'Yankees' },
-    { id: 2, name: 'Dodgers' }
-  ];
-  const followedPlayers = [
-    { id: 100, fullName: 'Aaron Judge' },
-    { id: 200, fullName: 'Mookie Betts' }
-  ];
+  // Replace the dummy data with user data from AuthContext
+  const { user } = useAuth();
+  
+  // Get followed teams and players from user data
+  const followedTeams = user?.preferences?.teams || [];
+  const followedPlayers = user?.preferences?.players || [];
 
   // Placeholder upcoming events
   const upcomingEvents = [
@@ -107,7 +104,6 @@ function RecommendationsPage() {
   const [newComment, setNewComment] = useState('');
 
   // Get current user from AuthContext
-  const { user } = useAuth();
   const [recommendations, setRecommendations] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
