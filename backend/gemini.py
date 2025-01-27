@@ -32,12 +32,3 @@ def run_gemini_prompt(prompt):
     except Exception as e:
         logger.error(f"Error running Gemini prompt: {str(e)}", exc_info=True)
         return None
-
-if __name__ == "__main__":
-    example_prompt = "Who is Jensen Huang"
-    result = run_gemini_prompt(example_prompt)
-    if result:
-        print("Generated Response:")
-        print(result)
-    else:
-        print("Failed response.")

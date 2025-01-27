@@ -18,6 +18,8 @@ from cfknn import recommend_reels, build_and_save_model, run_main
 from db import load_data, add, remove, get_video_url, get_follow_vid
 from sqlalchemy import create_engine
 from sqlalchemy.sql import text
+from gemini import run_gemini_prompt
+import re
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -153,6 +155,7 @@ def get_highlights():
                           keyword.get('value') == str(player_id) 
                           for keyword in highlight.get('keywordsAll', [])):
                         
+                        # Get the best quality playback URL
                         playbacks = highlight.get('playbacks', [])
                         if playbacks:
                             best_playback = max(playbacks, key=lambda x: int(x.get('height', 0) or 0))
@@ -303,6 +306,40 @@ def get_follow_recommendations(current_user):
     except Exception as e:
         logger.error(f"Error fetching follow recommendations: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/generate-blurb', methods=['POST'])
+def generate_blurb():
+    data = request.json
+    title = data.get('title')
+
+    if not title:
+        logger.error("Title is required in the request.")
+        return jsonify({"success": False, "message": "Title is required"}), 400
+
+    title = re.sub(r"\s*\([^)]*\)$", "", title)
+
+    try:
+        prompt = f"Generate a short and engaging description for the baseball video titled: {title}. Keep your response to under 20 words. Your response should start with the content and just one sentence. Do not include filler like OK, here is a short and engaging description."
+        description = run_gemini_prompt(prompt)
+        if ':' in description:
+            description = description.split(':', 1)[1].strip()
+        if description:
+            return jsonify({
+                "success": True,
+                "description": description
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "message": "Failed to generate description"
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Error in generating description: {str(e)}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "message": "Internal server error"
+        }), 500
 
 # Initialize the translation client
 translate_client = translate.Client()
