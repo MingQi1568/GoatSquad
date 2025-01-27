@@ -19,7 +19,6 @@ from db import load_data, add, remove, get_video_url, get_follow_vid
 from sqlalchemy import create_engine
 from sqlalchemy.sql import text
 
-# Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -31,13 +30,11 @@ def init_connection_pool():
     db_pass = os.getenv("DB_PASS")
     db_name = os.getenv("DB_NAME")
     
-    # Connect through Cloud SQL Proxy
     DATABASE_URL = f"postgresql://{db_user}:{db_pass}@34.71.48.54:5432/{db_name}"
     return DATABASE_URL
 
 app = Flask(__name__)
 
-# Add the before_request handler AFTER app creation
 @app.before_request
 def before_request():
     os.chdir(ORIGINAL_DIR)
@@ -49,7 +46,6 @@ app.config['SQLALCHEMY_DATABASE_URI'] = init_connection_pool()
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Initialize extensions
 db.init_app(app)
 print("11. Before Flask app creation:", os.getcwd())
 current_dir = os.getcwd()
@@ -57,10 +53,8 @@ print("11. Before Flask app creation:", os.getcwd())
 print(current_dir)
 migrate = Migrate(app, db)
 
-# Create tables and initialize admin user
 with app.app_context():
     try:
-        # Create tables only if they don't exist
         db.create_all()
         # Initialize admin user
         init_admin()
@@ -142,9 +136,7 @@ def get_highlights():
         schedule_data = schedule_response.json()
 
         all_highlights = []
-        
-        # Process each date's games
-        for date in schedule_data.get('dates', [])[:10]:  # Look at last 10 days to find more highlights
+        for date in schedule_data.get('dates', [])[:10]:  
             for game in date.get('games', []):
                 game_pk = game.get('gamePk')
                 
@@ -161,7 +153,6 @@ def get_highlights():
                           keyword.get('value') == str(player_id) 
                           for keyword in highlight.get('keywordsAll', [])):
                         
-                        # Get the best quality playback URL
                         playbacks = highlight.get('playbacks', [])
                         if playbacks:
                             best_playback = max(playbacks, key=lambda x: int(x.get('height', 0) or 0))
@@ -174,7 +165,6 @@ def get_highlights():
                                 'timestamp': highlight.get('date', date.get('date'))  # Use highlight date if available
                             })
 
-        # Sort highlights by date (newest first) and take the 5 most recent
         sorted_highlights = sorted(
             all_highlights,
             key=lambda x: datetime.strptime(x['date'], '%Y-%m-%d') if x['date'] else datetime.min,
