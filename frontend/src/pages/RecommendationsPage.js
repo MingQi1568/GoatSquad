@@ -130,7 +130,7 @@ function RecommendationsPage() {
         `${process.env.REACT_APP_BACKEND_URL}/recommend/follow?page=${pageNum}`,
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
+            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
           }
         }
       );
@@ -142,7 +142,7 @@ function RecommendationsPage() {
             `${process.env.REACT_APP_BACKEND_URL}/api/mlb/video?play_id=${rec.reel_id}`,
             {
               headers: {
-                'Authorization': `Bearer ${localStorage.getItem('token')}`
+                'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
               }
             }
           );
