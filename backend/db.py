@@ -9,10 +9,11 @@ DATABASE_URL = "postgresql+psycopg2://postgres:vibhas69@34.71.48.54:5432/user_ra
 def load_data(table):
     print("7. load_data called, directory:", os.getcwd())
     engine = create_engine(DATABASE_URL)
-    query = f"SELECT * FROM {table}"  
+    query = f"SELECT * FROM {table}"
+    print("table: " + table)
     try:
         with engine.connect() as connection:
-            ratings = pd.read_sql_query(query, connection)
+            ratings = pd.read_sql_query(query, connection.connection)
     except Exception as e:
         print(f"Error fetching data: {e}")
         return None
