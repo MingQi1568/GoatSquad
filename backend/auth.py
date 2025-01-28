@@ -58,40 +58,56 @@ class User(db.Model):
 # Get secret key from environment variable or use a default for development
 SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'your-secret-key-here')
 
+
 def token_required(f):
     """Decorator to protect routes that require authentication"""
+
     @wraps(f)
     def decorated(*args, **kwargs):
-        token = None
+        auth_header = request.headers.get('Authorization', None)
 
-        if 'Authorization' in request.headers:
-            auth_header = request.headers['Authorization']
-            try:
-                token = auth_header.split(" ")[1]  # Bearer <token>
-            except IndexError:
-                logger.error("Invalid Authorization header format")
-                return jsonify({'success': False, 'message': 'Invalid token format'}), 401
-
-        if not token:
-            logger.error("No token provided")
+        if not auth_header:
+            logger.error("No Authorization header provided")
             return jsonify({'success': False, 'message': 'Token is missing'}), 401
 
+        # Check that it starts with 'Bearer '
+        parts = auth_header.split()
+        if len(parts) != 2 or parts[0].lower() != 'bearer':
+            logger.error(f"Invalid Authorization header format: {auth_header}")
+            return jsonify({'success': False, 'message': 'Invalid token format'}), 401
+
+        token = parts[1]
+
+        # Optional extra check: ensure token has at least 2 dots
+        if token.count('.') != 2:
+            logger.error("JWT token does not contain the required 3 segments")
+            return jsonify({'success': False, 'message': 'Invalid token structure'}), 401
+
+        # Now try decoding
         try:
-            # Add verify_exp=False to disable expiration checking
-            data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"], options={"verify_exp": False})
+            data = jwt.decode(
+                token,
+                SECRET_KEY,
+                algorithms=["HS256"],
+                options={"verify_exp": False}
+            )
             current_user = User.query.filter_by(client_id=data['user_id']).first()
-            
+
             if current_user is None:
                 logger.error(f"User not found for token user_id: {data.get('user_id')}")
                 return jsonify({'success': False, 'message': 'User not found'}), 401
 
             return f(current_user=current_user, *args, **kwargs)
-            
+
+        except jwt.DecodeError:
+            logger.error("Failed to decode JWT token", exc_info=True)
+            return jsonify({'success': False, 'message': 'Token decode failed'}), 401
         except Exception as e:
             logger.error(f"Token validation error: {str(e)}", exc_info=True)
             return jsonify({'success': False, 'message': 'Token validation failed'}), 401
 
     return decorated
+
 
 class AuthService:
     @staticmethod
