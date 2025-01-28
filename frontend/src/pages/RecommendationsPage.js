@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import PageTransition from '../components/PageTransition';
-import { useAuth } from '../contexts/AuthContext';
-import TranslatedText from '../components/TranslatedText';
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import PageTransition from "../components/PageTransition";
+import { useAuth } from "../contexts/AuthContext";
+import TranslatedText from "../components/TranslatedText";
 
 // A helper function to simulate new data fetch:
 function generateMockPosts(page = 1) {
@@ -10,60 +10,60 @@ function generateMockPosts(page = 1) {
   const baseItems = [
     {
       id: 1,
-      type: 'news',
+      type: "news",
       title: `Breaking: Big Trade Rumors (Page ${page})`,
-      description: 'Rumors are swirling about a potential blockbuster trade...',
+      description: "Rumors are swirling about a potential blockbuster trade...",
       fullText: `Multiple sources indicate a major trade on page ${page}.`,
       upvotes: 10,
       downvotes: 2,
       comments: [
         {
           id: 101,
-          author: 'Mark Edwards',
-          avatarUrl: '/images/default-avatar.jpg',
-          title: 'This rumor could shake up the league!',
-          content: 'Lots of buzz on page ' + page,
-        }
-      ]
+          author: "Mark Edwards",
+          avatarUrl: "/images/default-avatar.jpg",
+          title: "This rumor could shake up the league!",
+          content: "Lots of buzz on page " + page,
+        },
+      ],
     },
     {
       id: 2,
-      type: 'video',
+      type: "video",
       title: `Amazing Homerun Highlight (Page ${page})`,
-      description: 'Check out this clutch homerun by the star player!',
+      description: "Check out this clutch homerun by the star player!",
       fullText: `A 2-run homer on page ${page}.`,
       videoUrl:
-        'https://cuts.diamond.mlb.com/FORGE/2019/2019-04/22/abdef6c1-be0c15cf-0075faf5-csvm-diamondx64-asset_1280x720_59_4000K.mp4',
+        "https://cuts.diamond.mlb.com/FORGE/2019/2019-04/22/abdef6c1-be0c15cf-0075faf5-csvm-diamondx64-asset_1280x720_59_4000K.mp4",
       upvotes: 25,
       downvotes: 1,
       comments: [
         {
           id: 201,
-          author: 'GrandSlam',
-          avatarUrl: '/images/default-avatar.jpg',
-          title: 'Clutch Performance',
-          content: 'Unbelievable! That crack of the bat gave me chills.'
-        }
-      ]
+          author: "GrandSlam",
+          avatarUrl: "/images/default-avatar.jpg",
+          title: "Clutch Performance",
+          content: "Unbelievable! That crack of the bat gave me chills.",
+        },
+      ],
     },
     {
       id: 3,
-      type: 'news',
+      type: "news",
       title: `Injury Update (Page ${page})`,
-      description: 'Star pitcher is expected to return soon...',
+      description: "Star pitcher is expected to return soon...",
       fullText: `Good news on page ${page}: the ace is recovering.`,
       upvotes: 5,
       downvotes: 0,
       comments: [
         {
           id: 301,
-          author: 'FastballFreak',
-          avatarUrl: '/images/default-avatar.jpg',
-          title: 'Crucial for the Postseason',
-          content: 'They need him healthy.'
-        }
-      ]
-    }
+          author: "FastballFreak",
+          avatarUrl: "/images/default-avatar.jpg",
+          title: "Crucial for the Postseason",
+          content: "They need him healthy.",
+        },
+      ],
+    },
   ];
 
   // In a real scenario, you'll have unique IDs for each item. Here,
@@ -76,19 +76,39 @@ function generateMockPosts(page = 1) {
   });
 }
 
+const fetchDescriptionFromGemini = async (title) => {
+  try {
+    const response = await fetch(
+      `${process.env.REACT_APP_BACKEND_URL}/api/generate-blurb`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ title }),
+      }
+    );
+    const data = await response.json();
+    return data.success ? data.description : title;
+  } catch (error) {
+    console.error("Error fetching description:", error);
+    return "Description unavailable.";
+  }
+};
+
 function RecommendationsPage() {
   // Replace the dummy data with user data from AuthContext
   const { user } = useAuth();
-  
+
   // Get followed teams and players from user data
   const followedTeams = user?.preferences?.teams || [];
   const followedPlayers = user?.preferences?.players || [];
 
   // Placeholder upcoming events
   const upcomingEvents = [
-    { id: 1, date: 'Jan 20', event: 'Spring Training Begins' },
-    { id: 2, date: 'Feb 14', event: 'First Preseason Game' },
-    { id: 3, date: 'Mar 27', event: 'Opening Day' }
+    { id: 1, date: "Jan 20", event: "Spring Training Begins" },
+    { id: 2, date: "Feb 14", event: "First Preseason Game" },
+    { id: 3, date: "Mar 27", event: "Opening Day" },
   ];
 
   // Track all feed items
@@ -101,7 +121,7 @@ function RecommendationsPage() {
   // Track the post open in the modal (if any)
   const [expandedPost, setExpandedPost] = useState(null);
   // For new comment text
-  const [newComment, setNewComment] = useState('');
+  const [newComment, setNewComment] = useState("");
 
   // Get current user from AuthContext
   const [recommendations, setRecommendations] = useState([]);
@@ -135,7 +155,7 @@ function RecommendationsPage() {
         }
       );
       const data = await response.json();
-      
+
       if (data.success) {
         const newRecommendations = await Promise.all(data.recommendations.map(async (rec) => {
           const videoResponse = await fetch(
@@ -143,28 +163,35 @@ function RecommendationsPage() {
             {
               headers: {
                 'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+                }
               }
-            }
-          );
-          const videoData = await videoResponse.json();
-          
-          return {
-            id: rec.reel_id,
-            type: 'video',
-            title: videoData.success ? `${videoData.title} (follow)` : 'Followed Team/Player Highlight',
-            description: videoData.success ? videoData.blurb : 'Highlight from your followed teams/players',
-            videoUrl: videoData.success ? videoData.video_url : null,
-            upvotes: 0,
-            downvotes: 0,
-            comments: []
-          };
-        }));
+            );
+            const videoData = await videoResponse.json();
 
-        setFollowRecommendations(prev => [...prev, ...newRecommendations]);
+            const generatedDescription = await fetchDescriptionFromGemini(
+              videoData.title
+            );
+
+            return {
+              id: rec.reel_id,
+              type: "video",
+              title: videoData.success ? `${videoData.title} (follow)` : 'Followed Team/Player Highlight',
+              description: videoData.success
+                ? generatedDescription
+                : "Highlight from your followed teams/players",
+              videoUrl: videoData.success ? videoData.video_url : null,
+              upvotes: 0,
+              downvotes: 0,
+              comments: [],
+            };
+          })
+        );
+
+        setFollowRecommendations((prev) => [...prev, ...newRecommendations]);
         setFollowHasMore(data.has_more);
       }
     } catch (err) {
-      console.error('Error fetching follow recommendations:', err);
+      console.error("Error fetching follow recommendations:", err);
     } finally {
       setIsLoadingMore(false);
     }
@@ -179,37 +206,44 @@ function RecommendationsPage() {
         `${process.env.REACT_APP_BACKEND_URL}/recommend/predict?user_id=${user.id}&page=${pageNum}&per_page=5&table=user_ratings_db`
       );
       const data = await response.json();
-      
+
       if (data.success && data.recommendations?.length > 0) {
-        const newRecommendations = await Promise.all(data.recommendations.map(async (rec) => {
-          if (!rec.reel_id) return null;
+        const newRecommendations = await Promise.all(
+          data.recommendations.map(async (rec) => {
+            if (!rec.reel_id) return null;
 
-          try {
-            const videoResponse = await fetch(
-              `${process.env.REACT_APP_BACKEND_URL}/api/mlb/video?play_id=${rec.reel_id}`
-            );
-            const videoData = await videoResponse.json();
-            
-            if (!videoData.success) return null;
-            
-            return {
-              id: rec.reel_id,
-              type: 'video',
-              title: `${videoData.title} (model)`,
-              description: videoData.blurb,
-              videoUrl: videoData.video_url,
-              upvotes: Math.floor(rec.predicted_score),
-              downvotes: 0,
-              comments: []
-            };
-          } catch (err) {
-            return null;
-          }
-        }));
+            try {
+              const videoResponse = await fetch(
+                `${process.env.REACT_APP_BACKEND_URL}/api/mlb/video?play_id=${rec.reel_id}`
+              );
+              const videoData = await videoResponse.json();
+              const generatedDescription = await fetchDescriptionFromGemini(
+                videoData.title || "Baseball highlight"
+              );
 
-        const validRecommendations = newRecommendations.filter(rec => rec !== null);
+              if (!videoData.success) return null;
+
+              return {
+                id: rec.reel_id,
+                type: "video",
+                title: `${videoData.title} (model)`,
+                description: generatedDescription,
+                videoUrl: videoData.video_url,
+                upvotes: Math.floor(rec.predicted_score),
+                downvotes: 0,
+                comments: [],
+              };
+            } catch (err) {
+              return null;
+            }
+          })
+        );
+
+        const validRecommendations = newRecommendations.filter(
+          (rec) => rec !== null
+        );
         if (validRecommendations.length > 0) {
-          setModelRecommendations(prev => [...prev, ...validRecommendations]);
+          setModelRecommendations((prev) => [...prev, ...validRecommendations]);
           setModelHasMore(data.has_more);
           setIsModelLoaded(true);
         } else {
@@ -271,9 +305,9 @@ function RecommendationsPage() {
     const totalPages = Math.ceil(currentPage);
 
     for (let i = 0; i < totalPages; i++) {
-      const startIdx = Math.floor(i/2) * pageSize;
+      const startIdx = Math.floor(i / 2) * pageSize;
       const endIdx = startIdx + pageSize;
-      
+
       if (i % 2 === 0) {
         // Add follow recommendations page
         const pageItems = followRecommendations.slice(startIdx, endIdx);
@@ -288,7 +322,7 @@ function RecommendationsPage() {
         }
       }
     }
-    
+
     return combined;
   }, [isModelLoaded, followRecommendations, modelRecommendations, currentPage]);
 
@@ -299,8 +333,8 @@ function RecommendationsPage() {
   useEffect(() => {
     const options = {
       root: null,
-      rootMargin: '200px',
-      threshold: 0.1
+      rootMargin: "200px",
+      threshold: 0.1,
     };
 
     const observer = new IntersectionObserver((entries) => {
@@ -346,7 +380,7 @@ function RecommendationsPage() {
   // Open modal for a specific post
   const handleOpenModal = (post) => {
     setExpandedPost(post);
-    setNewComment(''); // clear out any previous text
+    setNewComment(""); // clear out any previous text
   };
   // Close modal
   const handleCloseModal = () => {
@@ -364,16 +398,16 @@ function RecommendationsPage() {
         ...prevPost.comments,
         {
           id: Date.now(),
-          author: 'You',
-          avatarUrl: '/images/default-avatar.jpg',
-          title: 'My Response',
-          content: newComment
-        }
+          author: "You",
+          avatarUrl: "/images/default-avatar.jpg",
+          title: "My Response",
+          content: newComment,
+        },
       ];
 
       return { ...prevPost, comments: updatedComments };
     });
-    setNewComment('');
+    setNewComment("");
   };
 
   // Add this function to calculate rating based on view time
@@ -391,41 +425,47 @@ function RecommendationsPage() {
   // Add function to submit rating
   const submitRating = async (reelId, rating) => {
     if (!user?.id || lastSubmittedRating[reelId]) return;
-    
+
     try {
       const response = await fetch(
         `${process.env.REACT_APP_BACKEND_URL}/recommend/add?user_id=${user.id}&reel_id=${reelId}&rating=${rating}&table=user_ratings_db`
       );
       if (response.ok) {
-        setLastSubmittedRating(prev => ({...prev, [reelId]: true}));
+        setLastSubmittedRating((prev) => ({ ...prev, [reelId]: true }));
       }
     } catch (error) {
-      console.error('Error submitting rating:', error);
+      console.error("Error submitting rating:", error);
     }
   };
 
   // Add these handlers for video events
   const handleTimeUpdate = (itemId, event) => {
     const video = event.target;
-    setViewTimes(prev => ({
+    setViewTimes((prev) => ({
       ...prev,
       [itemId]: {
         viewTime: (prev[itemId]?.viewTime || 0) + 0.25, // Update every quarter second
-        duration: video.duration
-      }
+        duration: video.duration,
+      },
     }));
   };
 
   const handleVideoEnd = (itemId) => {
     if (viewTimes[itemId]) {
-      const rating = calculateRating(viewTimes[itemId].viewTime, viewTimes[itemId].duration);
+      const rating = calculateRating(
+        viewTimes[itemId].viewTime,
+        viewTimes[itemId].duration
+      );
       submitRating(itemId, rating);
     }
   };
 
   const handleVideoSwitch = (currentItemId) => {
     if (viewTimes[currentItemId]) {
-      const rating = calculateRating(viewTimes[currentItemId].viewTime, viewTimes[currentItemId].duration);
+      const rating = calculateRating(
+        viewTimes[currentItemId].viewTime,
+        viewTimes[currentItemId].duration
+      );
       submitRating(currentItemId, rating);
     }
   };
@@ -491,11 +531,12 @@ function RecommendationsPage() {
             {!isModelLoaded && (
               <div className="bg-blue-50 dark:bg-blue-900 p-4 rounded-lg mb-4">
                 <p className="text-blue-700 dark:text-blue-200">
-                  Loading personalized recommendations... Meanwhile, enjoy highlights from your favorite teams and players!
+                  Loading personalized recommendations... Meanwhile, enjoy
+                  highlights from your favorite teams and players!
                 </p>
               </div>
             )}
-            
+
             {combinedRecommendations.map((item) => (
               <div
                 key={item.id}
@@ -511,7 +552,7 @@ function RecommendationsPage() {
                 </p>
 
                 {/* If it's a video, show the video player */}
-                {item.type === 'video' && item.videoUrl && (
+                {item.type === "video" && item.videoUrl && (
                   <div className="mt-4">
                     <video
                       controls
@@ -588,7 +629,9 @@ function RecommendationsPage() {
             {/* Loading indicator */}
             {isLoadingMore && (
               <div className="text-center py-4">
-                <p className="text-gray-600 dark:text-gray-400">Loading more content...</p>
+                <p className="text-gray-600 dark:text-gray-400">
+                  Loading more content...
+                </p>
               </div>
             )}
 
@@ -651,7 +694,9 @@ function RecommendationsPage() {
                            transition-colors"
                 onClick={handleCloseModal}
               >
-                <span className="sr-only"><TranslatedText text="Close" /></span>
+                <span className="sr-only">
+                  <TranslatedText text="Close" />
+                </span>
                 <svg
                   className="h-6 w-6"
                   fill="none"
@@ -676,7 +721,7 @@ function RecommendationsPage() {
                 </h2>
 
                 {/* Video if applicable */}
-                {expandedPost.type === 'video' && expandedPost.videoUrl && (
+                {expandedPost.type === "video" && expandedPost.videoUrl && (
                   <div className="mb-4">
                     <video
                       controls
@@ -712,7 +757,8 @@ function RecommendationsPage() {
                             <img
                               className="h-12 w-12 rounded-full object-cover"
                               src={
-                                comment.avatarUrl || '/images/default-avatar.jpg'
+                                comment.avatarUrl ||
+                                "/images/default-avatar.jpg"
                               }
                               alt={comment.author}
                             />
