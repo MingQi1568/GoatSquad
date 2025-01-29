@@ -5,7 +5,6 @@ from google.genai import types
 import logging
 import google.generativeai as genai
 import os
-from auth import AuthService, token_required, db, init_admin
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -51,13 +50,5 @@ def generate_embeddings(text):
     except Exception as e:
         logger.error(f"Error generating embeddings: {str(e)}", exc_info=True)
         return None
-
-@token_required
-def query_embedding(current_user):
-    followed_teams = [team.get('name', '') for team in (current_user.followed_teams or [])]
-    followed_players = [player.get('fullName', '') for player in (current_user.followed_players or [])]
-    query = f"Followed Teams: {', '.join(followed_teams)}. Followed Players: {', '.join(followed_players)}."
-    return generate_embeddings(query)
-
 
 
