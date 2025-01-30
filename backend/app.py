@@ -228,25 +228,66 @@ def remove_rating():
 
 @app.route('/recommend/predict', methods=['GET'])
 def get_model_recommendations():
-    """Get recommendations from the model"""
+    """
+    Get recommendations from the model,
+    optionally filtering with ?search=someTerm
+    """
     try:
         user_id = int(request.args.get('user_id'))
         page = int(request.args.get('page', default=1))
         per_page = int(request.args.get('per_page', default=5))
         table = request.args.get('table', default='user_ratings_db')
-        
+        search = request.args.get('search', '').strip().lower()
+
         offset = (page - 1) * per_page
-        recommendations, has_more = run_main(table, user_id=user_id, num_recommendations=per_page, offset=offset)
-        
-        if recommendations:
+        # run_main returns [(reel_id, predicted_score)], plus has_more boolean
+        recs, has_more = run_main(table, user_id=user_id, num_recommendations=per_page, offset=offset)
+
+        # If you want to do additional filtering by a column in 'mlb_highlights',
+        # you'd need to cross-check recs with your highlights table and filter
+        # by search in 'title', etc.  Here's an example:
+
+        if search:
+            # We'll filter on something like 'title' or 'blurb' stored in your mlb_highlights table
+            # Build a set of reel_ids from the CFKNN results
+            reel_ids = [r["reel_id"] for r in recs]
+            if not reel_ids:
+                return jsonify({'success': True, 'recommendations': [], 'has_more': False})
+
+            reel_ids_str = ", ".join(str(rid) for rid in reel_ids)
+
+            engine = create_engine(init_connection_pool())
+            with engine.connect() as conn:
+                # Example query to see if there's a 'title' or 'blurb' in the table
+                # Adjust to suit your actual schema
+                highlights_query = text(f"""
+                    SELECT id, title
+                    FROM mlb_highlights
+                    WHERE id IN ({reel_ids_str})
+                      AND (LOWER(title) LIKE :search OR LOWER(blurb) LIKE :search)
+                """)
+                highlight_results = conn.execute(highlights_query, {"search": f"%{search}%"}).fetchall()
+                valid_ids = set(row[0] for row in highlight_results)
+
+            # Now filter out any rec that doesn't appear
+            filtered_recs = [r for r in recs if r["reel_id"] in valid_ids]
+            # We might not exactly know if there's "has_more" left. For simplicity,
+            # just set has_more to False if we do a search. Or do more logic as needed.
             return jsonify({
                 'success': True,
-                'recommendations': recommendations,
+                'recommendations': filtered_recs,
+                'has_more': False  # or your own logic
+            })
+
+        # Else, no search param => just return as normal
+        if recs:
+            return jsonify({
+                'success': True,
+                'recommendations': recs,
                 'has_more': has_more
             })
-        
-        return jsonify({'success': False, 'message': 'No recommendations found'}), 404
-        
+        return jsonify({'success': True, 'recommendations': [], 'has_more': False})
+
     except Exception as e:
         logger.error(f"Error getting model recommendations: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -254,13 +295,17 @@ def get_model_recommendations():
 @app.route('/recommend/follow', methods=['GET'])
 @token_required
 def get_follow_recommendations(current_user):
-    """Get recommendations based on followed teams and players"""
+    """
+    Get recommendations based on followed teams and players,
+    optionally filtering with ?search=someTerm
+    """
     try:
         table = request.args.get('table', default='mlb_highlights')
         page = int(request.args.get('page', default=1))
         per_page = int(request.args.get('per_page', default=5))
+        search = request.args.get('search', '').strip().lower()
 
-        # Get user's followed teams and players from database
+        # Must have a user
         if not current_user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
 
@@ -271,38 +316,59 @@ def get_follow_recommendations(current_user):
         if not followed_teams and not followed_players:
             return jsonify({'success': False, 'message': 'No teams or players followed'}), 400
 
-        # Calculate offset for pagination
         offset = (page - 1) * per_page
 
-        # Get multiple videos for followed teams/players with pagination
-        engine = create_engine(init_connection_pool())
-        query = text(f"""
-            SELECT id as reel_id FROM {table} 
-            WHERE player = ANY(:players) OR home_team = ANY(:teams) OR away_team = ANY(:teams)
+        # Build a dynamic WHERE clause to optionally filter by search
+        # Adjust columns to suit your actual DB schema (title, blurb, player, etc.)
+        # Example: Searching in 'player', 'title', or 'blurb' columns
+        base_query = f"""
+            SELECT id as reel_id 
+            FROM {table}
+            WHERE (
+                player = ANY(:players) 
+                OR home_team = ANY(:teams) 
+                OR away_team = ANY(:teams)
+            )
+        """
+        # If we have a search term, add a filter
+        if search:
+            # Searching in "player", "title", or "blurb" columns
+            base_query += " AND (LOWER(player) LIKE :search OR LOWER(title) LIKE :search OR LOWER(blurb) LIKE :search)"
+
+        # Final ordering & pagination
+        base_query += """
             ORDER BY RANDOM()
             OFFSET :offset
             LIMIT :limit
-        """)
-        
+        """
+
+        # Build the param dict
+        param_dict = {
+            "players": followed_players,
+            "teams": followed_teams,
+            "offset": offset,
+            "limit": per_page + 1,  # get one extra to see if there's more
+        }
+        if search:
+            param_dict["search"] = f"%{search}%"
+
+        # Execute
+        engine = create_engine(init_connection_pool())
         with engine.connect() as connection:
-            results = connection.execute(query, {
-                "players": followed_players, 
-                "teams": followed_teams,
-                "offset": offset,
-                "limit": per_page + 1  # Get one extra to check if there are more
-            }).fetchall()
-            
+            results = connection.execute(text(base_query), param_dict).fetchall()
+
             if results:
+                # Check if we got more than per_page
                 has_more = len(results) > per_page
+                # Slice off the extra
                 recommendations = [{"reel_id": row[0]} for row in results[:per_page]]
                 return jsonify({
                     'success': True,
                     'recommendations': recommendations,
                     'has_more': has_more
                 })
-            
-            return jsonify({'success': False, 'message': 'No matching videos found'}), 404
-            
+            return jsonify({'success': True, 'recommendations': [], 'has_more': False})
+
     except Exception as e:
         logger.error(f"Error fetching follow recommendations: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
