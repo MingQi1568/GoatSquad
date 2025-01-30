@@ -1,4 +1,5 @@
 // File: frontend/src/pages/RecommendationsPage.js
+
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import PageTransition from "../components/PageTransition";
 import { useAuth } from "../contexts/AuthContext";
@@ -30,13 +31,15 @@ function RecommendationsPage() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isModelLoaded, setIsModelLoaded] = useState(false);
 
-  // Pagination
-  const [currentPage, setCurrentPage] = useState(1);
+  // Pagination tracking
+  const [currentPage, setCurrentPage] = useState(1); // Only declared once
   const [followHasMore, setFollowHasMore] = useState(true);
   const [modelHasMore, setModelHasMore] = useState(true);
   const [hasMore, setHasMore] = useState(true);
 
-  // ------------- Functions to fetch data -------------
+  // -----------------------------------------
+  // Dummy functions to fetch data with search
+  // -----------------------------------------
   const fetchFollowRecommendations = async (pageNum, theSearchTerm) => {
     try {
       setIsLoadingMore(true);
@@ -46,13 +49,10 @@ function RecommendationsPage() {
           theSearchTerm
         )}`,
         {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+          headers: { Authorization: `Bearer ${token}` },
         }
       );
       const data = await response.json();
-
       if (data.success && Array.isArray(data.recommendations)) {
         const newRecs = await Promise.all(
           data.recommendations.map(async (rec) => {
@@ -65,7 +65,7 @@ function RecommendationsPage() {
             );
             const videoData = await videoRes.json();
 
-            // Example: generate the description with Gemini
+            // For demonstration, generate the description with Gemini
             const generated = await fetchDescriptionFromGemini(
               videoData.title || "MLB Highlight"
             );
@@ -110,7 +110,6 @@ function RecommendationsPage() {
         )}`
       );
       const data = await response.json();
-
       if (data.success && Array.isArray(data.recommendations)) {
         const newRecs = await Promise.all(
           data.recommendations.map(async (rec) => {
@@ -143,7 +142,6 @@ function RecommendationsPage() {
             }
           })
         );
-
         const valid = newRecs.filter((r) => r);
         if (pageNum === 1) {
           setModelRecommendations(valid);
@@ -187,16 +185,13 @@ function RecommendationsPage() {
 
   // Combine the two sets of recs in an interleaved manner
   const combinedRecommendations = useMemo(() => {
-    // If model not loaded yet, just show follow recs
     if (!isModelLoaded) return followRecommendations;
-
-    // Otherwise, we interleave them. For simplicity, we just put follow recs first
-    // and then model recs.
     return [...followRecommendations, ...modelRecommendations];
   }, [followRecommendations, modelRecommendations, isModelLoaded]);
 
-  // Infinity scroll logic via IntersectionObserver
+  // Infinity scroll logic
   const sentinelRef = useRef(null);
+
   useEffect(() => {
     const observer = new IntersectionObserver(
       ([entry]) => {
@@ -231,12 +226,11 @@ function RecommendationsPage() {
     setHasMore(followHasMore || modelHasMore);
   }, [followHasMore, modelHasMore]);
 
-  // Search logic: hitting 'Search' or 'Enter' resets page to 1 and re-fetches
+  // Search logic
   const handleSearchSubmit = (e) => {
     e.preventDefault();
     setIsSearching(true);
     setCurrentPage(1);
-    // Clear existing recs so they get replaced
     setFollowRecommendations([]);
     setModelRecommendations([]);
     fetchFollowRecommendations(1, searchTerm).then(() => {
@@ -246,11 +240,9 @@ function RecommendationsPage() {
     });
   };
 
-  // For expansions, new comment, etc. (omitted for brevity here)
+  // For expansions, new comment, etc. (omitted for brevity)
   const [expandedPost, setExpandedPost] = useState(null);
   const [newComment, setNewComment] = useState("");
-
-  // The rest of your upvote/downvote logic or handleTimeUpdate, etc. omitted for brevity
 
   return (
     <PageTransition>
@@ -279,8 +271,8 @@ function RecommendationsPage() {
 
         <div className="grid grid-cols-12 gap-8">
           {/* LEFT SIDEBAR */}
-          <aside className="col-span-3 hidden lg:block relative">
-            <div className="fixed w-[280px] left-[calc((100vw-80rem)/2+1.5rem)] space-y-6 top-24">
+          <aside className="col-span-3 hidden lg:block">
+            <div className="sticky top-24 space-y-6">
               {/* Followed Teams */}
               <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-4">
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
@@ -349,7 +341,7 @@ function RecommendationsPage() {
                 </h3>
                 <p className="mt-2 text-gray-700 dark:text-gray-300">{item.description}</p>
 
-                {/* Example: show video if item.type==="video" */}
+                {/* If it's a video, show the video player */}
                 {item.type === "video" && item.videoUrl && (
                   <div className="mt-4">
                     <video
@@ -362,18 +354,16 @@ function RecommendationsPage() {
                     </video>
                   </div>
                 )}
-
-                {/* Example buttons, up/downvote, etc. omitted */}
               </div>
             ))}
 
-            {/* Infinity scrolling sentinel */}
+            {/* Infinity scroll sentinel */}
             <div ref={sentinelRef} className="h-10" />
           </main>
 
           {/* RIGHT SIDEBAR */}
-          <aside className="col-span-3 hidden lg:block relative">
-            <div className="fixed w-[280px] right-[calc((100vw-80rem)/2+1.5rem)] top-24">
+          <aside className="col-span-3 hidden lg:block">
+            <div className="sticky top-24">
               <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-4">
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
                   <TranslatedText text="Upcoming Events" />
@@ -396,8 +386,6 @@ function RecommendationsPage() {
           </aside>
         </div>
       </div>
-
-      {/* You can put your modal markup here if needed */}
     </PageTransition>
   );
 }
