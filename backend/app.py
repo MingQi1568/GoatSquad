@@ -15,11 +15,13 @@ from google.cloud.sql.connector import Connector
 import sqlalchemy
 from werkzeug.middleware.proxy_fix import ProxyFix
 from cfknn import recommend_reels, build_and_save_model, run_main
-from db import load_data, add, remove, get_video_url, get_follow_vid
+from db import load_data, add, remove, get_video_url, get_follow_vid, search_feature
 from sqlalchemy import create_engine
 from sqlalchemy.sql import text
 from gemini import run_gemini_prompt
 import re
+import random
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -78,8 +80,6 @@ CORS(app, resources={
 api = Api(app, version='1.0', 
     title='MLB Fan Feed API',
     description='API for MLB fan feed features')
-
-
 
 news_ns = api.namespace('news', description='News operations')
 
@@ -226,12 +226,53 @@ def remove_rating():
         logger.error(f"Error removing rating: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
 
+@app.route('/recommend/search', methods=['GET'])
+def get_search_recommendations():
+    try:
+        search = request.args.get('search', '').strip().lower()
+
+        if search: 
+            data = search_feature("embeddings", search, 5)
+            ids = [item['id'] for item in data]
+            return jsonify({
+                'success': True,
+                'recommendations': ids,
+                'has_more': False  
+            })
+    except Exception as e:
+        logger.error(f"Error getting model recommendations: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+RANDOM_TEAMS = ['New York Yankees', 'Los Angeles Dodgers', 'Chicago Cubs', 'Boston Red Sox', 'Houston Astros']
+RANDOM_PLAYERS = ['Aaron Judge', 'Mookie Betts', 'Shohei Ohtani', 'Mike Trout', 'Freddie Freeman']
+
+@app.route('/recommend/vector', methods=['GET'])
+@token_required
+def get_vector_recommendations(current_user):
+    try:
+        followed_teams = [team.get('name', '') for team in (current_user.followed_teams or [])]
+        followed_players = [player.get('fullName', '') for player in (current_user.followed_players or [])]
+        if not followed_teams:
+            followed_teams = random.sample(RANDOM_TEAMS, min(3, len(RANDOM_TEAMS)))  
+        if not followed_players:
+            followed_players = random.sample(RANDOM_PLAYERS, min(3, len(RANDOM_PLAYERS)))  
+
+        query = f"Teams: {', '.join(followed_teams)}. Players: {', '.join(followed_players)}."
+
+        if query: 
+            data = search_feature("embeddings", query, 5)
+            ids = [item['id'] for item in data]
+            return jsonify({
+                'success': True,
+                'recommendations': ids,
+                'has_more': False  
+            })
+    except Exception as e:
+        logger.error(f"Error getting model recommendations: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 @app.route('/recommend/predict', methods=['GET'])
 def get_model_recommendations():
-    """
-    Get recommendations from the model,
-    optionally filtering with ?search=someTerm
-    """
     try:
         user_id = int(request.args.get('user_id'))
         page = int(request.args.get('page', default=1))
@@ -240,16 +281,9 @@ def get_model_recommendations():
         search = request.args.get('search', '').strip().lower()
 
         offset = (page - 1) * per_page
-        # run_main returns [(reel_id, predicted_score)], plus has_more boolean
         recs, has_more = run_main(table, user_id=user_id, num_recommendations=per_page, offset=offset)
 
-        # If you want to do additional filtering by a column in 'mlb_highlights',
-        # you'd need to cross-check recs with your highlights table and filter
-        # by search in 'title', etc.  Here's an example:
-
         if search:
-            # We'll filter on something like 'title' or 'blurb' stored in your mlb_highlights table
-            # Build a set of reel_ids from the CFKNN results
             reel_ids = [r["reel_id"] for r in recs]
             if not reel_ids:
                 return jsonify({'success': True, 'recommendations': [], 'has_more': False})
@@ -258,8 +292,6 @@ def get_model_recommendations():
 
             engine = create_engine(init_connection_pool())
             with engine.connect() as conn:
-                # Example query to see if there's a 'title' or 'blurb' in the table
-                # Adjust to suit your actual schema
                 highlights_query = text(f"""
                     SELECT id, title
                     FROM mlb_highlights
@@ -268,24 +300,21 @@ def get_model_recommendations():
                 """)
                 highlight_results = conn.execute(highlights_query, {"search": f"%{search}%"}).fetchall()
                 valid_ids = set(row[0] for row in highlight_results)
-
-            # Now filter out any rec that doesn't appear
             filtered_recs = [r for r in recs if r["reel_id"] in valid_ids]
-            # We might not exactly know if there's "has_more" left. For simplicity,
-            # just set has_more to False if we do a search. Or do more logic as needed.
+          
             return jsonify({
                 'success': True,
                 'recommendations': filtered_recs,
                 'has_more': False  # or your own logic
             })
 
-        # Else, no search param => just return as normal
         if recs:
             return jsonify({
                 'success': True,
                 'recommendations': recs,
                 'has_more': has_more
             })
+        
         return jsonify({'success': True, 'recommendations': [], 'has_more': False})
 
     except Exception as e:
@@ -387,8 +416,10 @@ def generate_blurb():
     try:
         prompt = f"Generate a short and engaging description for the baseball video titled: {title}. Keep your response to under 20 words. Your response should start with the content and just one sentence. Do not include filler like OK, here is a short and engaging description."
         description = run_gemini_prompt(prompt)
-        if ':' in description:
+        
+        if description is not None and ':' in description:
             description = description.split(':', 1)[1].strip()
+        
         if description:
             return jsonify({
                 "success": True,
