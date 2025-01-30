@@ -37,7 +37,8 @@ function Navbar() {
     { path: '/news', label: 'News' },
     { path: '/calendar', label: 'Calendar' },
     { path: '/preferences', label: 'Preferences' },
-    { path: '/recommendations', label: 'Recommendations' }
+    { path: '/recommendations', label: 'Recommendations' },
+    { path: '/showcase-compilation', label: 'Showcase' }
   ];
 
   const handleLogout = () => {
