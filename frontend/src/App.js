@@ -13,6 +13,7 @@ import Profile from './pages/Profile';
 import Register from './pages/Register';
 import { AnimatePresence } from 'framer-motion';
 import RecommendationsPage from './pages/RecommendationsPage';
+import SavedVideos from './pages/SavedVideos';
 import { Toaster } from 'react-hot-toast';
 
 // Create a wrapper component that uses useLocation
@@ -63,6 +64,13 @@ function AnimatedRoutes() {
           <ProtectedRoute>
             <MainLayout>
               <RecommendationsPage />
+            </MainLayout>
+          </ProtectedRoute>
+        } />
+        <Route path="/saved-videos" element={
+          <ProtectedRoute>
+            <MainLayout>
+              <SavedVideos />
             </MainLayout>
           </ProtectedRoute>
         } />
