@@ -7,7 +7,7 @@ import requests
 from datetime import datetime
 import os
 from google.cloud import translate_v2 as translate
-from auth import AuthService, token_required, db, init_admin
+from auth import AuthService, token_required, db, init_admin, SavedVideo
 import grpc
 from routes.mlb import mlb
 from flask_migrate import Migrate
@@ -729,6 +729,88 @@ def get_video_url_endpoint():
     except Exception as e:
         logger.error(f"Error fetching video URL: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/videos/saved', methods=['GET', 'POST', 'DELETE'])
+@token_required
+def handle_saved_videos(current_user):
+    if request.method == 'GET':
+        try:
+            saved_videos = SavedVideo.query.filter_by(user_id=current_user.client_id).all()
+            return jsonify({
+                'success': True,
+                'videos': [{
+                    'id': video.id,
+                    'videoUrl': video.video_url,
+                    'title': video.title,
+                    'createdAt': video.created_at.isoformat() if video.created_at else None
+                } for video in saved_videos]
+            })
+        except Exception as e:
+            logger.error(f"Error fetching saved videos: {str(e)}", exc_info=True)
+            return jsonify({'success': False, 'message': str(e)}), 500
+
+    elif request.method == 'POST':
+        try:
+            data = request.get_json()
+            video_url = data.get('videoUrl')
+            title = data.get('title')
+
+            if not video_url:
+                return jsonify({'success': False, 'message': 'Video URL is required'}), 400
+
+            # Check if video is already saved
+            existing_video = SavedVideo.query.filter_by(
+                user_id=current_user.client_id,
+                video_url=video_url
+            ).first()
+
+            if existing_video:
+                return jsonify({'success': False, 'message': 'Video already saved'}), 409
+
+            new_video = SavedVideo(
+                user_id=current_user.client_id,
+                video_url=video_url,
+                title=title
+            )
+            db.session.add(new_video)
+            db.session.commit()
+
+            return jsonify({
+                'success': True,
+                'video': {
+                    'id': new_video.id,
+                    'videoUrl': new_video.video_url,
+                    'title': new_video.title,
+                    'createdAt': new_video.created_at.isoformat() if new_video.created_at else None
+                }
+            })
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error saving video: {str(e)}", exc_info=True)
+            return jsonify({'success': False, 'message': str(e)}), 500
+
+    elif request.method == 'DELETE':
+        try:
+            video_id = request.args.get('id')
+            if not video_id:
+                return jsonify({'success': False, 'message': 'Video ID is required'}), 400
+
+            video = SavedVideo.query.filter_by(
+                id=video_id,
+                user_id=current_user.client_id
+            ).first()
+
+            if not video:
+                return jsonify({'success': False, 'message': 'Video not found'}), 404
+
+            db.session.delete(video)
+            db.session.commit()
+
+            return jsonify({'success': True, 'message': 'Video removed from saved list'})
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error deleting saved video: {str(e)}", exc_info=True)
+            return jsonify({'success': False, 'message': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(

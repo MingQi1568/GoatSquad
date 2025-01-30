@@ -4,6 +4,8 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import PageTransition from "../components/PageTransition";
 import { useAuth } from "../contexts/AuthContext";
 import TranslatedText from "../components/TranslatedText";
+import { userService } from "../services/userService";
+import { toast } from "react-hot-toast";
 
 function RecommendationsPage() {
   // Replace the dummy data with user data from AuthContext
@@ -161,7 +163,7 @@ function RecommendationsPage() {
     }
   };
 
-  // Example “Gemini” fetch for the description
+  // Example "Gemini" fetch for the description
   const fetchDescriptionFromGemini = async (title) => {
     try {
       const res = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/generate-blurb`, {
@@ -243,6 +245,44 @@ function RecommendationsPage() {
   // For expansions, new comment, etc. (omitted for brevity)
   const [expandedPost, setExpandedPost] = useState(null);
   const [newComment, setNewComment] = useState("");
+
+  const [savedVideos, setSavedVideos] = useState(new Set());
+
+  // Load saved videos on mount
+  useEffect(() => {
+    const loadSavedVideos = async () => {
+      try {
+        const response = await userService.getSavedVideos();
+        if (response.success) {
+          setSavedVideos(new Set(response.videos.map(v => v.videoUrl)));
+        }
+      } catch (error) {
+        console.error('Error loading saved videos:', error);
+      }
+    };
+
+    if (user) {
+      loadSavedVideos();
+    }
+  }, [user]);
+
+  const handleSaveVideo = async (video) => {
+    try {
+      if (savedVideos.has(video.videoUrl)) {
+        toast.error('Video already saved!');
+        return;
+      }
+
+      const response = await userService.saveVideo(video.videoUrl, video.title);
+      if (response.success) {
+        setSavedVideos(prev => new Set([...prev, video.videoUrl]));
+        toast.success('Video saved successfully!');
+      }
+    } catch (error) {
+      console.error('Error saving video:', error);
+      toast.error(error.response?.data?.message || 'Error saving video');
+    }
+  };
 
   return (
     <PageTransition>
@@ -336,9 +376,25 @@ function RecommendationsPage() {
                            transition-transform hover:-translate-y-0.5
                            hover:shadow-lg duration-300 ease-in-out"
               >
-                <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
-                  {item.title}
-                </h3>
+                <div className="flex justify-between items-start mb-2">
+                  <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
+                    {item.title}
+                  </h3>
+                  {item.type === "video" && item.videoUrl && (
+                    <button
+                      onClick={() => handleSaveVideo(item)}
+                      disabled={savedVideos.has(item.videoUrl)}
+                      className={`px-3 py-1 rounded-md text-sm font-medium transition-colors
+                        ${savedVideos.has(item.videoUrl)
+                          ? 'bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed'
+                          : 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800'
+                        }`}
+                    >
+                      {savedVideos.has(item.videoUrl) ? 'Saved' : 'Save Video'}
+                    </button>
+                  )}
+                </div>
+
                 <p className="mt-2 text-gray-700 dark:text-gray-300">{item.description}</p>
 
                 {/* If it's a video, show the video player */}
