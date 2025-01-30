@@ -19,6 +19,7 @@ from db import load_data, add, remove, get_video_url, get_follow_vid
 from sqlalchemy import create_engine
 from sqlalchemy.sql import text
 from gemini import run_gemini_prompt
+from highlight import generate_videos
 import re
 
 logging.basicConfig(level=logging.INFO)
@@ -632,6 +633,37 @@ def get_video_url_endpoint():
     except Exception as e:
         logger.error(f"Error fetching video URL: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/showcase/compile', methods=['POST'])
+@token_required
+def compile_showcase(current_user):
+    try:
+        # Get 10 random video URLs from mlb_highlights
+        engine = create_engine(init_connection_pool())
+        query = text("""
+            SELECT url FROM mlb_highlights 
+            ORDER BY RANDOM() 
+            LIMIT 10
+        """)
+        
+        with engine.connect() as connection:
+            results = connection.execute(query).fetchall()
+            video_urls = [row[0] for row in results]
+
+        # Call generate_videos with the URLs and user ID
+        output_uri = generate_videos(video_urls, current_user.client_id)
+        
+        return jsonify({
+            'success': True,
+            'output_uri': output_uri
+        })
+        
+    except Exception as e:
+        logger.error(f"Error compiling showcase: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
 
 if __name__ == '__main__':
     app.run(
