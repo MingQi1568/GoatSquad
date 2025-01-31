@@ -737,21 +737,28 @@ def compile_showcase(current_user):
     try:
         # Get request data
         data = request.get_json() or {}
-        audio_url = data.get('audio_url')  # Optional audio URL
+        video_urls = data.get('videoUrls', [])
+        audio_track = data.get('audioTrack')
         
-        # Get 10 random video URLs from mlb_highlights
-        engine = create_engine(init_connection_pool())
-        query = text("""
-            SELECT url FROM mlb_highlights 
-            ORDER BY RANDOM() 
-            LIMIT 10
-        """)
-        
-        with engine.connect() as connection:
-            results = connection.execute(query).fetchall()
-            video_urls = [row[0] for row in results]
+        if not video_urls:
+            return jsonify({
+                'success': False,
+                'message': 'No videos provided for compilation'
+            }), 400
 
-        # Call generate_videos with the URLs, user ID, and optional audio
+        # Map audio track ID to actual audio file in GCS
+        audio_map = {
+            'rock_anthem': 'highlightMusic/rock_anthem.mp3',
+            'cinematic_theme': 'highlightMusic/cinematic.mp3',
+            'funky_groove': 'highlightMusic/funky.mp3',
+            'hiphop_vibes': 'highlightMusic/hiphop.mp3',
+            # Default to thickOfIt.mp3 if no track selected or invalid track
+            None: 'highlightMusic/thickOfIt.mp3'
+        }
+        
+        audio_url = f"gs://goatbucket1/{audio_map.get(audio_track, audio_map[None])}"
+
+        # Call generate_videos with the URLs, user ID, and audio
         output_uri = generate_videos(video_urls, current_user.client_id, audio_url)
         
         return jsonify({

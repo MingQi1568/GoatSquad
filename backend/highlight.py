@@ -23,55 +23,95 @@ def generate_videos(video_urls, user_id, audio_url=None):
     Args:
         video_urls: List of video URLs to compile
         user_id: User ID for the output filename
+        audio_url: GCS URL for the background audio track (e.g. gs://bucket/path/to/audio.mp3)
     """
-    video_uris = []
-    i = 0
-    for video in video_urls:
-        video_uris.append(download_to_gcs(video, "goatbucket1", f"videos/{i}"))
-        i += 1
-    
-    clipStartTimes = []
-    clipEndTimes = []
-    for uri in video_uris:
-        clipTime = get_engaging_moments(uri).split(",")
-        clipStartTimes.append(float(clipTime[0]))
-        clipEndTimes.append(float(clipTime[1]))
-    
-    video_sections = []
-    for i in range(len(video_urls)):
-        video_sections.append((video_urls[i], float(clipStartTimes[i]), float(clipEndTimes[i])))
-    
-    # Load video clips with audio
-    clips = [load_remote_video_with_audio(url, start, end) for url, start, end in video_sections]
+    if not video_urls:
+        raise ValueError("No video URLs provided")
 
-    # Concatenate the video clips
+    print(f"Processing {len(video_urls)} videos for user {user_id}")
+    
+    video_uris = []
+    for i, video in enumerate(video_urls):
+        try:
+            if not video.startswith(('http://', 'https://')):
+                raise ValueError(f"Invalid video URL format: {video}")
+            
+            print(f"Downloading video {i + 1}/{len(video_urls)}: {video}")
+            video_uri = download_to_gcs(video, "goatbucket1", f"videos/{user_id}_{i}")
+            video_uris.append(video_uri)
+        except Exception as e:
+            print(f"Error processing video {i + 1}: {str(e)}")
+            raise
+    
+    print("Getting engaging moments for each video...")
+    video_sections = []
+    for i, uri in enumerate(video_uris):
+        try:
+            clipTime = get_engaging_moments(uri).split(",")
+            start_time = float(clipTime[0])
+            end_time = float(clipTime[1])
+            video_sections.append((video_urls[i], start_time, end_time))
+            print(f"Video {i + 1} clip time: {start_time} to {end_time}")
+        except Exception as e:
+            print(f"Error getting engaging moments for video {i + 1}: {str(e)}")
+            # Use default 3-second clip if analysis fails
+            video_sections.append((video_urls[i], 0.0, 3.0))
+    
+    print("Loading video clips with audio...")
+    clips = []
+    for i, (url, start, end) in enumerate(video_sections):
+        try:
+            clip = load_remote_video_with_audio(url, start, end)
+            clips.append(clip)
+            print(f"Successfully loaded video {i + 1}")
+        except Exception as e:
+            print(f"Error loading video {i + 1}: {str(e)}")
+            raise
+
+    print("Concatenating video clips...")
     final_video = mp.concatenate_videoclips(clips, method="compose")
     
     try:
-        # Download audio from GCS
-        storage_client = storage.Client()
-        bucket = storage_client.bucket("goatbucket1")
-        blob = bucket.blob("highlightMusic/thickOfIt.mp3")
-        
-        with NamedTemporaryFile(suffix='.mp3', delete=False) as temp_audio:
-            blob.download_to_filename(temp_audio.name)
+        if audio_url:
+            print("Applying background audio...")
+            # Parse bucket and blob path from GCS URL
+            bucket_name = audio_url.split('/')[2]
+            blob_path = '/'.join(audio_url.split('/')[3:])
             
-            # Load audio and set duration to match video
-            background_audio = mp.AudioFileClip(temp_audio.name)
-            background_audio = background_audio.set_duration(final_video.duration)
+            # Download audio from GCS
+            storage_client = storage.Client()
+            bucket = storage_client.bucket(bucket_name)
+            blob = bucket.blob(blob_path)
             
-            # Set the background audio
-            final_video = final_video.set_audio(background_audio)
-            
-            # Clean up temp file
-            os.unlink(temp_audio.name)
+            with NamedTemporaryFile(suffix='.mp3', delete=False) as temp_audio:
+                blob.download_to_filename(temp_audio.name)
+                print("Background audio downloaded successfully")
+                
+                # Load audio and set duration to match video
+                background_audio = mp.AudioFileClip(temp_audio.name)
+                background_audio = background_audio.set_duration(final_video.duration)
+                
+                # Set the background audio
+                final_video = final_video.set_audio(background_audio)
+                
+                # Clean up temp file
+                os.unlink(temp_audio.name)
+                print("Background audio applied successfully")
     except Exception as e:
-        logger.error(f"Error applying background audio: {str(e)}")
+        print(f"Error applying background audio: {str(e)}")
         # Continue with original audio if background audio fails
-
-    output_path = f"completeHighlights/{user_id}"
+    
+    print("Uploading final video...")
+    output_path = f"completeHighlights/{user_id}_{int(datetime.datetime.now().timestamp())}.mp4"
     upload_video_to_gcs(final_video, "goatbucket1", output_path)
-    print("Great Success!")
+    print("Upload complete!")
+    
+    # Clean up temporary GCS files
+    try:
+        for i in range(len(video_uris)):
+            delete_from_gcs("goatbucket1", f"videos/{user_id}_{i}")
+    except Exception as e:
+        print(f"Error cleaning up temporary files: {str(e)}")
     
     # Convert GCS URI to public URL
     public_url = f"https://storage.googleapis.com/goatbucket1/{output_path}"
@@ -124,34 +164,46 @@ def get_engaging_moments(video_uri):
 
 def load_remote_video_with_audio(url, start_time, end_time):
     """Loads a remote MP4 file with both video and audio"""
+    print(f"Loading video from {url} (time: {start_time} to {end_time})")
+    
     # Create temporary files for video and audio
     temp_video = NamedTemporaryFile(delete=False, suffix=".mp4")
     temp_audio = NamedTemporaryFile(delete=False, suffix=".m4a")  # Use .m4a for AAC audio
 
-    # Download and trim video with sound using ffmpeg
-    (
-        ffmpeg
-        .input(url, ss=start_time, to=end_time)
-        .output(temp_video.name, vcodec="libx264", acodec="aac")
-        .run(overwrite_output=True)
-    )
+    try:
+        # Download and trim video with sound using ffmpeg
+        (
+            ffmpeg
+            .input(url, ss=start_time, to=end_time)
+            .output(temp_video.name, vcodec="libx264", acodec="aac")
+            .run(overwrite_output=True, capture_stdout=True, capture_stderr=True)
+        )
 
-    # Extract the audio separately
-    (
-        ffmpeg
-        .input(temp_video.name)
-        .output(temp_audio.name, acodec="copy", vn=None)  # Extract AAC without re-encoding
-        .run(overwrite_output=True)
-    )
+        # Extract the audio separately
+        (
+            ffmpeg
+            .input(temp_video.name)
+            .output(temp_audio.name, acodec="copy", vn=None)  # Extract AAC without re-encoding
+            .run(overwrite_output=True, capture_stdout=True, capture_stderr=True)
+        )
 
-    # Load the video and audio in moviepy
-    video_clip = mp.VideoFileClip(temp_video.name)
-    audio_clip = mp.AudioFileClip(temp_audio.name)
+        # Load the video and audio in moviepy
+        video_clip = mp.VideoFileClip(temp_video.name)
+        audio_clip = mp.AudioFileClip(temp_audio.name)
 
-    # Attach the trimmed audio to the video
-    video_clip = video_clip.set_audio(audio_clip)
+        # Attach the trimmed audio to the video
+        video_clip = video_clip.set_audio(audio_clip)
 
-    return video_clip
+        return video_clip
+    except Exception as e:
+        raise Exception(f"Error processing video: {str(e)}")
+    finally:
+        # Clean up temporary files
+        try:
+            os.unlink(temp_video.name)
+            os.unlink(temp_audio.name)
+        except Exception as e:
+            print(f"Error cleaning up temporary files: {str(e)}")
 
 
 def download_to_gcs(url, bucket_name, destination_blob_name):
@@ -166,6 +218,8 @@ def download_to_gcs(url, bucket_name, destination_blob_name):
     Returns:
         str: The gs:// URI of the uploaded file.
     """
+    print(f"Downloading video from {url}")
+    
     # Initialize Google Cloud Storage client
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
@@ -174,6 +228,11 @@ def download_to_gcs(url, bucket_name, destination_blob_name):
     # Stream the video file from the URL
     response = requests.get(url, stream=True)
     if response.status_code == 200:
+        # Check if the content is actually a video
+        content_type = response.headers.get('content-type', '')
+        if not content_type.startswith(('video/', 'application/octet-stream')):
+            raise ValueError(f"Invalid content type: {content_type}. Expected video content.")
+        
         # Upload to GCS
         blob.upload_from_string(response.content, content_type="video/mp4")
         print(f"Uploaded to gs://{bucket_name}/{destination_blob_name}")
