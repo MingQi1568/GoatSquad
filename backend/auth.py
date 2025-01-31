@@ -259,4 +259,15 @@ def init_admin():
             logger.info("Initialized default admin user")
     except Exception as e:
         db.session.rollback()
-        logger.error(f"Error creating admin user: {str(e)}") 
+        logger.error(f"Error creating admin user: {str(e)}")
+
+class CustomMusic(db.Model):
+    __tablename__ = 'custom_music'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('client_info.client_id'), nullable=False)
+    filename = db.Column(db.String(500), nullable=False)
+    original_filename = db.Column(db.String(500), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    user = db.relationship('User', backref=db.backref('custom_music', lazy=True)) 

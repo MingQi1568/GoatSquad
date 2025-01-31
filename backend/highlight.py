@@ -56,7 +56,7 @@ def generate_videos(video_urls, user_id, audio_url=None):
             print(f"Error getting engaging moments for video {i + 1}: {str(e)}")
             # Use default 3-second clip if analysis fails
             video_sections.append((video_urls[i], 0.0, 3.0))
-    
+
     print("Loading video clips with audio...")
     clips = []
     for i, (url, start, end) in enumerate(video_sections):
@@ -100,7 +100,7 @@ def generate_videos(video_urls, user_id, audio_url=None):
     except Exception as e:
         print(f"Error applying background audio: {str(e)}")
         # Continue with original audio if background audio fails
-    
+
     print("Uploading final video...")
     output_path = f"completeHighlights/{user_id}_{int(datetime.datetime.now().timestamp())}.mp4"
     upload_video_to_gcs(final_video, "goatbucket1", output_path)
