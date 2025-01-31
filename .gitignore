@@ -813,3 +813,7 @@ backend/knn_model.pkl
 .DS_Store
 #ignore model
 backend/knn_model.pkl
+
+backend/upload_music.py
+backend/static/audio/custom/
+backend/static/audio/previews/

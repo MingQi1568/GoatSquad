@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, redirect, send_from_directory
 from flask_restx import Api, Resource
 from flask_cors import CORS
 from news_digest import get_news_digest
@@ -7,7 +7,7 @@ import requests
 from datetime import datetime
 import os
 from google.cloud import translate_v2 as translate
-from auth import AuthService, token_required, db, init_admin, SavedVideo
+from auth import AuthService, token_required, db, init_admin, SavedVideo, CustomMusic
 import grpc
 from routes.mlb import mlb
 from flask_migrate import Migrate
@@ -22,12 +22,39 @@ from gemini import run_gemini_prompt
 from highlight import generate_videos
 import re
 import random
-
+from google.cloud import storage
+from werkzeug.utils import secure_filename
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 ORIGINAL_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Create Flask app first
+app = Flask(__name__)
+
+# Then set up configuration
+UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static/audio')
+ALLOWED_AUDIO_EXTENSIONS = {'mp3', 'wav', 'm4a', 'aac'}
+
+# Create all required directories
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(os.path.join(UPLOAD_FOLDER, 'previews'), exist_ok=True)
+os.makedirs(os.path.join(UPLOAD_FOLDER, 'custom'), exist_ok=True)
+
+# Default preview tracks configuration
+DEFAULT_PREVIEWS = {
+    'rock_anthem_preview.mp3': 'Rock Anthem',
+    'hiphop_vibes_preview.mp3': 'Hip-Hop Vibes',
+    'cinematic_preview.mp3': 'Cinematic Theme',
+    'funky_preview.mp3': 'Funky Groove'
+}
+
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+
+def allowed_audio_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_AUDIO_EXTENSIONS
 
 def init_connection_pool():
     """Initialize database connection"""
@@ -38,8 +65,6 @@ def init_connection_pool():
     DATABASE_URL = f"postgresql://{db_user}:{db_pass}@34.71.48.54:5432/{db_name}"
     return DATABASE_URL
 
-app = Flask(__name__)
-
 @app.before_request
 def before_request():
     os.chdir(ORIGINAL_DIR)
@@ -48,7 +73,6 @@ print("2. Before Flask app creation:", os.getcwd())
 
 # Configure database connection
 app.config['SQLALCHEMY_DATABASE_URI'] = init_connection_pool()
-
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
@@ -737,21 +761,69 @@ def compile_showcase(current_user):
     try:
         # Get request data
         data = request.get_json() or {}
-        audio_url = data.get('audio_url')  # Optional audio URL
+        video_urls = data.get('videoUrls', [])
+        audio_track = data.get('audioTrack')
         
-        # Get 10 random video URLs from mlb_highlights
-        engine = create_engine(init_connection_pool())
-        query = text("""
-            SELECT url FROM mlb_highlights 
-            ORDER BY RANDOM() 
-            LIMIT 10
-        """)
+        logger.info(f"Compiling showcase with audio track: {audio_track}")
         
-        with engine.connect() as connection:
-            results = connection.execute(query).fetchall()
-            video_urls = [row[0] for row in results]
+        if not video_urls:
+            return jsonify({
+                'success': False,
+                'message': 'No videos provided for compilation'
+            }), 400
 
-        # Call generate_videos with the URLs, user ID, and optional audio
+        # Initialize GCS client
+        storage_client = storage.Client()
+        bucket = storage_client.bucket('goatbucket1')
+
+        # Get the GCS audio file path
+        audio_url = None
+        if audio_track:
+            if audio_track.startswith('custom_'):
+                try:
+                    track_id = int(audio_track.split('_')[1])
+                    track = CustomMusic.query.get(track_id)
+                    if track and track.user_id == current_user.client_id:
+                        # Upload custom track to GCS if it exists locally
+                        local_path = os.path.join(app.config['UPLOAD_FOLDER'], 'custom', track.filename)
+                        if os.path.exists(local_path):
+                            gcs_path = f"highlightMusic/custom/{current_user.client_id}_{track.filename}"
+                            blob = bucket.blob(gcs_path)
+                            blob.upload_from_filename(local_path)
+                            audio_url = f"gs://goatbucket1/{gcs_path}"
+                            logger.info(f"Uploaded custom audio track to GCS: {audio_url}")
+                        else:
+                            logger.error(f"Custom audio file not found: {local_path}")
+                    else:
+                        logger.error(f"Custom track not found or unauthorized: {audio_track}")
+                except Exception as e:
+                    logger.error(f"Error processing custom track: {str(e)}")
+            else:
+                # Map track IDs to GCS paths
+                audio_map = {
+                    'hiphop_vibes': 'highlightMusic/hiphop_vibes.mp3',
+                    'rock_anthem': 'highlightMusic/rock_anthem.mp3',
+                    'cinematic_theme': 'highlightMusic/cinematic_theme.mp3',
+                    'funky_groove': 'highlightMusic/funky_groove.mp3'
+                }
+                if audio_track in audio_map:
+                    gcs_path = audio_map[audio_track]
+                    # Check if file exists in GCS
+                    blob = bucket.blob(gcs_path)
+                    if blob.exists():
+                        audio_url = f"gs://goatbucket1/{gcs_path}"
+                        logger.info(f"Using GCS audio track: {audio_url}")
+                    else:
+                        # If not in GCS, try to upload from local preview
+                        local_preview = os.path.join(app.config['UPLOAD_FOLDER'], 'previews', f"{audio_track}_preview.mp3")
+                        if os.path.exists(local_preview):
+                            blob.upload_from_filename(local_preview)
+                            audio_url = f"gs://goatbucket1/{gcs_path}"
+                            logger.info(f"Uploaded preview track to GCS: {audio_url}")
+                        else:
+                            logger.error(f"Audio file not found in GCS or locally: {gcs_path}")
+
+        # Call generate_videos with the URLs, user ID, and audio
         output_uri = generate_videos(video_urls, current_user.client_id, audio_url)
         
         return jsonify({
@@ -772,14 +844,79 @@ def handle_saved_videos(current_user):
     if request.method == 'GET':
         try:
             saved_videos = SavedVideo.query.filter_by(user_id=current_user.client_id).all()
+            
+            # Initialize GCS client
+            storage_client = storage.Client()
+            bucket = storage_client.bucket('goatbucket1')
+            
+            videos_with_signed_urls = []
+            for video in saved_videos:
+                try:
+                    # Extract blob path from video URL
+                    video_url = video.video_url
+                    blob_path = None
+                    
+                    if video_url.startswith('gs://'):
+                        # Handle gs:// URLs
+                        parts = video_url.replace('gs://', '').split('/', 1)
+                        if len(parts) == 2:
+                            blob_path = parts[1]
+                    elif 'storage.googleapis.com' in video_url:
+                        # Handle storage.googleapis.com URLs
+                        parts = video_url.split('goatbucket1/')
+                        if len(parts) == 2:
+                            blob_path = parts[1]
+                    elif video_url.startswith('completeHighlights/'):
+                        # Handle direct blob paths
+                        blob_path = video_url
+                    else:
+                        # For MLB video URLs, use them directly
+                        videos_with_signed_urls.append({
+                            'id': video.id,
+                            'videoUrl': video_url,
+                            'title': video.title,
+                            'createdAt': video.created_at.isoformat() if video.created_at else None
+                        })
+                        continue
+                    
+                    if blob_path:
+                        # Generate signed URL for GCS objects
+                        blob = bucket.blob(blob_path)
+                        if blob.exists():
+                            signed_url = blob.generate_signed_url(
+                                version="v4",
+                                expiration=datetime.timedelta(hours=1),
+                                method="GET"
+                            )
+                            videos_with_signed_urls.append({
+                                'id': video.id,
+                                'videoUrl': signed_url,
+                                'title': video.title,
+                                'createdAt': video.created_at.isoformat() if video.created_at else None
+                            })
+                        else:
+                            logger.warning(f"Video file not found in GCS: {blob_path}")
+                            # Still include the video with original URL if blob doesn't exist
+                            videos_with_signed_urls.append({
+                                'id': video.id,
+                                'videoUrl': video_url,
+                                'title': video.title,
+                                'createdAt': video.created_at.isoformat() if video.created_at else None
+                            })
+                    
+                except Exception as e:
+                    logger.error(f"Error processing video {video.id}: {str(e)}")
+                    # Include the video with original URL if processing fails
+                    videos_with_signed_urls.append({
+                        'id': video.id,
+                        'videoUrl': video.video_url,
+                        'title': video.title,
+                        'createdAt': video.created_at.isoformat() if video.created_at else None
+                    })
+            
             return jsonify({
                 'success': True,
-                'videos': [{
-                    'id': video.id,
-                    'videoUrl': video.video_url,
-                    'title': video.title,
-                    'createdAt': video.created_at.isoformat() if video.created_at else None
-                } for video in saved_videos]
+                'videos': videos_with_signed_urls
             })
         except Exception as e:
             logger.error(f"Error fetching saved videos: {str(e)}", exc_info=True)
@@ -847,6 +984,122 @@ def handle_saved_videos(current_user):
             db.session.rollback()
             logger.error(f"Error deleting saved video: {str(e)}", exc_info=True)
             return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/audio/previews/<filename>')
+def serve_audio_preview(filename):
+    """Serve audio preview files from GCS"""
+    try:
+        # Initialize GCS client
+        storage_client = storage.Client()
+        bucket = storage_client.bucket('goatbucket1')
+        blob = bucket.blob(f"highlightMusic/previews/{filename}")
+        
+        if not blob.exists():
+            logger.warning(f"Preview file not found in GCS: {filename}")
+            return jsonify({
+                'success': False,
+                'message': 'Audio preview file not found.'
+            }), 404
+        
+        # Generate a signed URL that's valid for 1 hour
+        signed_url = blob.generate_signed_url(
+            version="v4",
+            expiration=datetime.timedelta(hours=1),
+            method="GET"
+        )
+        
+        # Redirect to the signed URL
+        return redirect(signed_url)
+        
+    except Exception as e:
+        logger.error(f"Error serving audio preview: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': 'Failed to load audio preview'}), 500
+
+@app.route('/api/custom-music', methods=['POST'])
+@token_required
+def upload_custom_music(current_user):
+    """Upload custom background music"""
+    try:
+        if 'music' not in request.files:
+            return jsonify({'success': False, 'message': 'No file provided'}), 400
+            
+        file = request.files['music']
+        if file.filename == '':
+            return jsonify({'success': False, 'message': 'No file selected'}), 400
+            
+        if not allowed_audio_file(file.filename):
+            return jsonify({'success': False, 'message': 'Invalid file type. Allowed types: mp3, wav, m4a, aac'}), 400
+
+        # Secure the filename and add user ID to make it unique
+        filename = f"{current_user.client_id}_{secure_filename(file.filename)}"
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], 'custom', filename)
+        
+        # Create custom directory if it doesn't exist
+        os.makedirs(os.path.join(app.config['UPLOAD_FOLDER'], 'custom'), exist_ok=True)
+        
+        # Save the file
+        file.save(filepath)
+        
+        # Save to database
+        new_track = CustomMusic(
+            user_id=current_user.client_id,
+            filename=filename,
+            original_filename=file.filename
+        )
+        db.session.add(new_track)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'track': {
+                'id': new_track.id,
+                'filename': filename,
+                'originalName': file.filename
+            }
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error uploading custom music: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/custom-music', methods=['GET'])
+@token_required
+def get_custom_music(current_user):
+    """Get user's custom music tracks"""
+    try:
+        tracks = CustomMusic.query.filter_by(user_id=current_user.client_id).all()
+        return jsonify({
+            'success': True,
+            'tracks': [{
+                'id': track.id,
+                'filename': track.filename,
+                'originalName': track.original_filename,
+                'url': f"/audio/custom/{track.filename}"
+            } for track in tracks]
+        })
+    except Exception as e:
+        logger.error(f"Error fetching custom music: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/audio/custom/<filename>')
+@token_required
+def serve_custom_audio(current_user, filename):
+    """Serve custom audio files"""
+    try:
+        # Verify the file belongs to the user
+        track = CustomMusic.query.filter_by(
+            user_id=current_user.client_id,
+            filename=filename
+        ).first()
+        
+        if not track:
+            return jsonify({'success': False, 'message': 'File not found'}), 404
+            
+        return send_from_directory(os.path.join(app.config['UPLOAD_FOLDER'], 'custom'), filename)
+    except Exception as e:
+        logger.error(f"Error serving custom audio: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': 'Failed to load audio file'}), 500
 
 if __name__ == '__main__':
     app.run(
