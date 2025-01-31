@@ -1,9 +1,15 @@
 import pandas as pd
 from sqlalchemy import create_engine 
 from sqlalchemy.sql import text
+from gemini import generate_embeddings
 import os
 import random
+from auth import AuthService, token_required, db, init_admin
+import numpy as np
+import random
 
+RANDOM_TEAMS = ['New York Yankees', 'Los Angeles Dodgers', 'Chicago Cubs', 'Boston Red Sox', 'Houston Astros']
+RANDOM_PLAYERS = ['Aaron Judge', 'Mookie Betts', 'Shohei Ohtani', 'Mike Trout', 'Freddie Freeman']
 DATABASE_URL = "postgresql+psycopg2://postgres:vibhas69@34.71.48.54:5432/user_ratings_db"
 
 def load_data(table):
@@ -100,10 +106,59 @@ def get_follow_vid(table, followed_players, followed_teams):
         print(f"Error fetching random video: {e}")
         return None
 
+@token_required
+def query_embedding(current_user):
+    followed_teams = [team.get('name', '') for team in (current_user.followed_teams or [])]
+    followed_players = [player.get('fullName', '') for player in (current_user.followed_players or [])]
+    if not followed_teams:
+        followed_teams = random.sample(RANDOM_TEAMS, min(3, len(RANDOM_TEAMS)))  
+    if not followed_players:
+        followed_players = random.sample(RANDOM_PLAYERS, min(3, len(RANDOM_PLAYERS)))  
+
+    query = f"Teams: {', '.join(followed_teams)}. Players: {', '.join(followed_players)}."
+    return query
+
+def rag_recommend_pgvector(table, query_text, top_k=5):
+    engine = create_engine(DATABASE_URL)
+    query_embedding = generate_embeddings(query_text)
+
+    if not query_embedding:
+        print("Failed to generate query embedding.")
+        return []
+
+    query_embedding = np.array(query_embedding).tolist()  
+
+    query = text(f"""
+        SELECT id, embedding <-> CAST(:embedding AS vector) AS distance
+        FROM {table}
+        ORDER BY distance ASC
+        LIMIT :top_k
+    """)
+
+    try:
+        with engine.connect() as connection:
+            results = connection.execute(
+                query, 
+                {"embedding": f"[{', '.join(map(str, query_embedding))}]", "top_k": top_k}  
+            ).fetchall()
+
+            recommendations = [{"id": row[0], "distance": row[1]} for row in results]
+            print(recommendations)
+            return recommendations
+
+    except Exception as e:
+        print(f"Error performing RAG with pgvector: {e}")
+        return []
+    
+def search_feature(table, search, top_k):
+    return rag_recommend_pgvector(table, search, top_k)
+
 if __name__ == "__main__":
     followed_players = ['Shohei Ohtani', 'Mike Trout']
     followed_teams = ['Tampa Bay Rays', 'Houston Astros']
-    print(get_follow_vid('mlb_highlights', followed_players, followed_teams))
+    #print(get_follow_vid('mlb_highlights', followed_players, followed_teams))
+    search_feature("embeddings", "Player: Shohei", 5)
 
+    
 
 

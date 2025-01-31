@@ -7,7 +7,7 @@ import requests
 from datetime import datetime
 import os
 from google.cloud import translate_v2 as translate
-from auth import AuthService, token_required, db, init_admin
+from auth import AuthService, token_required, db, init_admin, SavedVideo
 import grpc
 from routes.mlb import mlb
 from flask_migrate import Migrate
@@ -15,12 +15,14 @@ from google.cloud.sql.connector import Connector
 import sqlalchemy
 from werkzeug.middleware.proxy_fix import ProxyFix
 from cfknn import recommend_reels, build_and_save_model, run_main
-from db import load_data, add, remove, get_video_url, get_follow_vid
+from db import load_data, add, remove, get_video_url, get_follow_vid, search_feature
 from sqlalchemy import create_engine
 from sqlalchemy.sql import text
 from gemini import run_gemini_prompt
 from highlight import generate_videos
 import re
+import random
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -79,8 +81,6 @@ CORS(app, resources={
 api = Api(app, version='1.0', 
     title='MLB Fan Feed API',
     description='API for MLB fan feed features')
-
-
 
 news_ns = api.namespace('news', description='News operations')
 
@@ -227,27 +227,97 @@ def remove_rating():
         logger.error(f"Error removing rating: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
 
+@app.route('/recommend/search', methods=['GET'])
+def get_search_recommendations():
+    try:
+        search = request.args.get('search', '').strip().lower()
+
+        if search: 
+            data = search_feature("embeddings", search, 5)
+            ids = [item['id'] for item in data]
+            return jsonify({
+                'success': True,
+                'recommendations': ids,
+                'has_more': False  
+            })
+    except Exception as e:
+        logger.error(f"Error getting model recommendations: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+RANDOM_TEAMS = ['New York Yankees', 'Los Angeles Dodgers', 'Chicago Cubs', 'Boston Red Sox', 'Houston Astros']
+RANDOM_PLAYERS = ['Aaron Judge', 'Mookie Betts', 'Shohei Ohtani', 'Mike Trout', 'Freddie Freeman']
+
+@app.route('/recommend/vector', methods=['GET'])
+@token_required
+def get_vector_recommendations(current_user):
+    try:
+        followed_teams = [team.get('name', '') for team in (current_user.followed_teams or [])]
+        followed_players = [player.get('fullName', '') for player in (current_user.followed_players or [])]
+        if not followed_teams:
+            followed_teams = random.sample(RANDOM_TEAMS, min(3, len(RANDOM_TEAMS)))  
+        if not followed_players:
+            followed_players = random.sample(RANDOM_PLAYERS, min(3, len(RANDOM_PLAYERS)))  
+
+        query = f"Teams: {', '.join(followed_teams)}. Players: {', '.join(followed_players)}."
+
+        if query: 
+            data = search_feature("embeddings", query, 5)
+            ids = [item['id'] for item in data]
+            return jsonify({
+                'success': True,
+                'recommendations': ids,
+                'has_more': False  
+            })
+    except Exception as e:
+        logger.error(f"Error getting model recommendations: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 @app.route('/recommend/predict', methods=['GET'])
 def get_model_recommendations():
-    """Get recommendations from the model"""
     try:
         user_id = int(request.args.get('user_id'))
         page = int(request.args.get('page', default=1))
         per_page = int(request.args.get('per_page', default=5))
         table = request.args.get('table', default='user_ratings_db')
-        
+        search = request.args.get('search', '').strip().lower()
+
         offset = (page - 1) * per_page
-        recommendations, has_more = run_main(table, user_id=user_id, num_recommendations=per_page, offset=offset)
-        
-        if recommendations:
+        recs, has_more = run_main(table, user_id=user_id, num_recommendations=per_page, offset=offset)
+
+        if search:
+            reel_ids = [r["reel_id"] for r in recs]
+            if not reel_ids:
+                return jsonify({'success': True, 'recommendations': [], 'has_more': False})
+
+            reel_ids_str = ", ".join(str(rid) for rid in reel_ids)
+
+            engine = create_engine(init_connection_pool())
+            with engine.connect() as conn:
+                highlights_query = text(f"""
+                    SELECT id, title
+                    FROM mlb_highlights
+                    WHERE id IN ({reel_ids_str})
+                      AND (LOWER(title) LIKE :search OR LOWER(blurb) LIKE :search)
+                """)
+                highlight_results = conn.execute(highlights_query, {"search": f"%{search}%"}).fetchall()
+                valid_ids = set(row[0] for row in highlight_results)
+            filtered_recs = [r for r in recs if r["reel_id"] in valid_ids]
+          
             return jsonify({
                 'success': True,
-                'recommendations': recommendations,
+                'recommendations': filtered_recs,
+                'has_more': False  # or your own logic
+            })
+
+        if recs:
+            return jsonify({
+                'success': True,
+                'recommendations': recs,
                 'has_more': has_more
             })
         
-        return jsonify({'success': False, 'message': 'No recommendations found'}), 404
-        
+        return jsonify({'success': True, 'recommendations': [], 'has_more': False})
+
     except Exception as e:
         logger.error(f"Error getting model recommendations: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -255,13 +325,17 @@ def get_model_recommendations():
 @app.route('/recommend/follow', methods=['GET'])
 @token_required
 def get_follow_recommendations(current_user):
-    """Get recommendations based on followed teams and players"""
+    """
+    Get recommendations based on followed teams and players,
+    optionally filtering with ?search=someTerm
+    """
     try:
         table = request.args.get('table', default='mlb_highlights')
         page = int(request.args.get('page', default=1))
         per_page = int(request.args.get('per_page', default=5))
+        search = request.args.get('search', '').strip().lower()
 
-        # Get user's followed teams and players from database
+        # Must have a user
         if not current_user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
 
@@ -272,38 +346,59 @@ def get_follow_recommendations(current_user):
         if not followed_teams and not followed_players:
             return jsonify({'success': False, 'message': 'No teams or players followed'}), 400
 
-        # Calculate offset for pagination
         offset = (page - 1) * per_page
 
-        # Get multiple videos for followed teams/players with pagination
-        engine = create_engine(init_connection_pool())
-        query = text(f"""
-            SELECT id as reel_id FROM {table} 
-            WHERE player = ANY(:players) OR home_team = ANY(:teams) OR away_team = ANY(:teams)
+        # Build a dynamic WHERE clause to optionally filter by search
+        # Adjust columns to suit your actual DB schema (title, blurb, player, etc.)
+        # Example: Searching in 'player', 'title', or 'blurb' columns
+        base_query = f"""
+            SELECT id as reel_id 
+            FROM {table}
+            WHERE (
+                player = ANY(:players) 
+                OR home_team = ANY(:teams) 
+                OR away_team = ANY(:teams)
+            )
+        """
+        # If we have a search term, add a filter
+        if search:
+            # Searching in "player", "title", or "blurb" columns
+            base_query += " AND (LOWER(player) LIKE :search OR LOWER(title) LIKE :search OR LOWER(blurb) LIKE :search)"
+
+        # Final ordering & pagination
+        base_query += """
             ORDER BY RANDOM()
             OFFSET :offset
             LIMIT :limit
-        """)
-        
+        """
+
+        # Build the param dict
+        param_dict = {
+            "players": followed_players,
+            "teams": followed_teams,
+            "offset": offset,
+            "limit": per_page + 1,  # get one extra to see if there's more
+        }
+        if search:
+            param_dict["search"] = f"%{search}%"
+
+        # Execute
+        engine = create_engine(init_connection_pool())
         with engine.connect() as connection:
-            results = connection.execute(query, {
-                "players": followed_players, 
-                "teams": followed_teams,
-                "offset": offset,
-                "limit": per_page + 1  # Get one extra to check if there are more
-            }).fetchall()
-            
+            results = connection.execute(text(base_query), param_dict).fetchall()
+
             if results:
+                # Check if we got more than per_page
                 has_more = len(results) > per_page
+                # Slice off the extra
                 recommendations = [{"reel_id": row[0]} for row in results[:per_page]]
                 return jsonify({
                     'success': True,
                     'recommendations': recommendations,
                     'has_more': has_more
                 })
-            
-            return jsonify({'success': False, 'message': 'No matching videos found'}), 404
-            
+            return jsonify({'success': True, 'recommendations': [], 'has_more': False})
+
     except Exception as e:
         logger.error(f"Error fetching follow recommendations: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -322,8 +417,10 @@ def generate_blurb():
     try:
         prompt = f"Generate a short and engaging description for the baseball video titled: {title}. Keep your response to under 20 words. Your response should start with the content and just one sentence. Do not include filler like OK, here is a short and engaging description."
         description = run_gemini_prompt(prompt)
-        if ':' in description:
+        
+        if description is not None and ':' in description:
             description = description.split(':', 1)[1].strip()
+        
         if description:
             return jsonify({
                 "success": True,
@@ -668,6 +765,88 @@ def compile_showcase(current_user):
             'success': False,
             'message': str(e)
         }), 500
+
+@app.route('/api/videos/saved', methods=['GET', 'POST', 'DELETE'])
+@token_required
+def handle_saved_videos(current_user):
+    if request.method == 'GET':
+        try:
+            saved_videos = SavedVideo.query.filter_by(user_id=current_user.client_id).all()
+            return jsonify({
+                'success': True,
+                'videos': [{
+                    'id': video.id,
+                    'videoUrl': video.video_url,
+                    'title': video.title,
+                    'createdAt': video.created_at.isoformat() if video.created_at else None
+                } for video in saved_videos]
+            })
+        except Exception as e:
+            logger.error(f"Error fetching saved videos: {str(e)}", exc_info=True)
+            return jsonify({'success': False, 'message': str(e)}), 500
+
+    elif request.method == 'POST':
+        try:
+            data = request.get_json()
+            video_url = data.get('videoUrl')
+            title = data.get('title')
+
+            if not video_url:
+                return jsonify({'success': False, 'message': 'Video URL is required'}), 400
+
+            # Check if video is already saved
+            existing_video = SavedVideo.query.filter_by(
+                user_id=current_user.client_id,
+                video_url=video_url
+            ).first()
+
+            if existing_video:
+                return jsonify({'success': False, 'message': 'Video already saved'}), 409
+
+            new_video = SavedVideo(
+                user_id=current_user.client_id,
+                video_url=video_url,
+                title=title
+            )
+            db.session.add(new_video)
+            db.session.commit()
+
+            return jsonify({
+                'success': True,
+                'video': {
+                    'id': new_video.id,
+                    'videoUrl': new_video.video_url,
+                    'title': new_video.title,
+                    'createdAt': new_video.created_at.isoformat() if new_video.created_at else None
+                }
+            })
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error saving video: {str(e)}", exc_info=True)
+            return jsonify({'success': False, 'message': str(e)}), 500
+
+    elif request.method == 'DELETE':
+        try:
+            video_id = request.args.get('id')
+            if not video_id:
+                return jsonify({'success': False, 'message': 'Video ID is required'}), 400
+
+            video = SavedVideo.query.filter_by(
+                id=video_id,
+                user_id=current_user.client_id
+            ).first()
+
+            if not video:
+                return jsonify({'success': False, 'message': 'Video not found'}), 404
+
+            db.session.delete(video)
+            db.session.commit()
+
+            return jsonify({'success': True, 'message': 'Video removed from saved list'})
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error deleting saved video: {str(e)}", exc_info=True)
+            return jsonify({'success': False, 'message': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(

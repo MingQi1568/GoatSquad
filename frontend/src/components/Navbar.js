@@ -39,6 +39,7 @@ function Navbar() {
     { path: '/preferences', label: 'Preferences' },
     { path: '/recommendations', label: 'Recommendations' },
     { path: '/showcase-compilation', label: 'Showcase' }
+    { path: '/saved-videos', label: 'Saved Videos' }
   ];
 
   const handleLogout = () => {
