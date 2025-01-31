@@ -29,6 +29,7 @@ def generate_videos(video_urls, user_id, audio_url=None):
         raise ValueError("No video URLs provided")
 
     print(f"Processing {len(video_urls)} videos for user {user_id}")
+    print(f"Using background audio: {audio_url}")
     
     # Process videos in parallel
     from concurrent.futures import ThreadPoolExecutor
@@ -65,7 +66,7 @@ def generate_videos(video_urls, user_id, audio_url=None):
     
     try:
         if audio_url:
-            print("Applying background audio...")
+            print(f"Applying background audio from {audio_url}...")
             # Parse bucket and blob path from GCS URL
             bucket_name = audio_url.split('/')[2]
             blob_path = '/'.join(audio_url.split('/')[3:])
@@ -81,11 +82,27 @@ def generate_videos(video_urls, user_id, audio_url=None):
                 
                 # Load audio and set duration to match video
                 background_audio = mp.AudioFileClip(temp_audio.name)
-                background_audio = background_audio.set_duration(final_video.duration)
+                
+                # If audio is shorter than video, loop it
+                if background_audio.duration < final_video.duration:
+                    num_loops = int(final_video.duration / background_audio.duration) + 1
+                    background_audio = mp.concatenate_audioclips([background_audio] * num_loops)
+                
+                # Trim audio to match video duration exactly
+                background_audio = background_audio.subclip(0, final_video.duration)
                 
                 # Set the background audio with lower volume
                 background_audio = background_audio.volumex(0.3)  # Reduce background music volume
-                final_video = final_video.set_audio(background_audio)
+                
+                # Combine original audio with background music
+                original_audio = final_video.audio
+                if original_audio is not None:
+                    original_audio = original_audio.volumex(0.7)  # Reduce original audio volume
+                    mixed_audio = mp.CompositeAudioClip([background_audio, original_audio])
+                else:
+                    mixed_audio = background_audio
+                
+                final_video = final_video.set_audio(mixed_audio)
                 
                 # Clean up temp file
                 os.unlink(temp_audio.name)
@@ -106,7 +123,8 @@ def generate_videos(video_urls, user_id, audio_url=None):
             preset='ultrafast',
             threads=0,
             fps=30,
-            bitrate='5000k'
+            bitrate='5000k',
+            audio_bitrate='192k'  # Increased audio bitrate for better quality
         )
         
         # Upload to GCS

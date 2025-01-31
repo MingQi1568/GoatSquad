@@ -4,7 +4,7 @@ from flask_cors import CORS
 from news_digest import get_news_digest
 import logging
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from google.cloud import translate_v2 as translate
 from auth import AuthService, token_required, db, init_admin, SavedVideo, CustomMusic
@@ -784,20 +784,44 @@ def compile_showcase(current_user):
                     track_id = int(audio_track.split('_')[1])
                     track = CustomMusic.query.get(track_id)
                     if track and track.user_id == current_user.client_id:
-                        # Upload custom track to GCS if it exists locally
-                        local_path = os.path.join(app.config['UPLOAD_FOLDER'], 'custom', track.filename)
-                        if os.path.exists(local_path):
-                            gcs_path = f"highlightMusic/custom/{current_user.client_id}_{track.filename}"
-                            blob = bucket.blob(gcs_path)
-                            blob.upload_from_filename(local_path)
-                            audio_url = f"gs://goatbucket1/{gcs_path}"
-                            logger.info(f"Uploaded custom audio track to GCS: {audio_url}")
+                        # Try different possible filename formats
+                        possible_filenames = [
+                            track.filename,
+                            f"{current_user.client_id}_{track.filename}",
+                            f"1_{current_user.client_id}_{track.filename}",
+                            f"1_{track.filename}"
+                        ]
+                        
+                        # Try different possible paths for each filename
+                        found_blob = None
+                        for filename in possible_filenames:
+                            logger.info(f"Checking filename: {filename}")
+                            possible_paths = [
+                                f"highlightMusic/custom/{filename}",
+                                f"custom/{filename}",
+                                filename
+                            ]
+                            
+                            for path in possible_paths:
+                                logger.info(f"Checking GCS path: {path}")
+                                blob = bucket.blob(path)
+                                if blob.exists():
+                                    logger.info(f"Found audio file in GCS at: {path}")
+                                    found_blob = blob
+                                    break
+                            
+                            if found_blob:
+                                break
+                        
+                        if found_blob:
+                            audio_url = f"gs://goatbucket1/{found_blob.name}"
+                            logger.info(f"Using audio track from GCS: {audio_url}")
                         else:
-                            logger.error(f"Custom audio file not found: {local_path}")
-                    else:
-                        logger.error(f"Custom track not found or unauthorized: {audio_track}")
+                            logger.error(f"Custom audio file not found in GCS for any variation of {track.filename}")
+                            return jsonify({'success': False, 'message': 'Custom audio file not found'}), 404
                 except Exception as e:
                     logger.error(f"Error processing custom track: {str(e)}")
+                    return jsonify({'success': False, 'message': str(e)}), 500
             else:
                 # Map track IDs to GCS paths
                 audio_map = {
@@ -808,20 +832,13 @@ def compile_showcase(current_user):
                 }
                 if audio_track in audio_map:
                     gcs_path = audio_map[audio_track]
-                    # Check if file exists in GCS
                     blob = bucket.blob(gcs_path)
                     if blob.exists():
                         audio_url = f"gs://goatbucket1/{gcs_path}"
                         logger.info(f"Using GCS audio track: {audio_url}")
                     else:
-                        # If not in GCS, try to upload from local preview
-                        local_preview = os.path.join(app.config['UPLOAD_FOLDER'], 'previews', f"{audio_track}_preview.mp3")
-                        if os.path.exists(local_preview):
-                            blob.upload_from_filename(local_preview)
-                            audio_url = f"gs://goatbucket1/{gcs_path}"
-                            logger.info(f"Uploaded preview track to GCS: {audio_url}")
-                        else:
-                            logger.error(f"Audio file not found in GCS or locally: {gcs_path}")
+                        logger.error(f"Default audio track not found in GCS: {gcs_path}")
+                        return jsonify({'success': False, 'message': 'Selected audio track not found'}), 404
 
         # Call generate_videos with the URLs, user ID, and audio
         output_uri = generate_videos(video_urls, current_user.client_id, audio_url)
@@ -885,7 +902,7 @@ def handle_saved_videos(current_user):
                         if blob.exists():
                             signed_url = blob.generate_signed_url(
                                 version="v4",
-                                expiration=datetime.timedelta(hours=1),
+                                expiration=timedelta(hours=1),
                                 method="GET"
                             )
                             videos_with_signed_urls.append({
@@ -1004,7 +1021,7 @@ def serve_audio_preview(filename):
         # Generate a signed URL that's valid for 1 hour
         signed_url = blob.generate_signed_url(
             version="v4",
-            expiration=datetime.timedelta(hours=1),
+            expiration=timedelta(hours=1),
             method="GET"
         )
         
@@ -1083,20 +1100,68 @@ def get_custom_music(current_user):
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/audio/custom/<filename>')
-@token_required
-def serve_custom_audio(current_user, filename):
+def serve_custom_audio(filename):
     """Serve custom audio files"""
     try:
-        # Verify the file belongs to the user
-        track = CustomMusic.query.filter_by(
-            user_id=current_user.client_id,
-            filename=filename
-        ).first()
+        logger.info(f"Attempting to serve custom audio: {filename}")
         
-        if not track:
-            return jsonify({'success': False, 'message': 'File not found'}), 404
+        # Initialize GCS client
+        storage_client = storage.Client()
+        bucket = storage_client.bucket('goatbucket1')
+        
+        # Extract user ID from filename (assuming format: {user_id}_{filename})
+        user_id = filename.split('_')[0]
+        
+        # Try different possible paths in GCS
+        possible_paths = [
+            f"highlightMusic/custom/{filename}",
+            f"highlightMusic/custom/{user_id}_{filename}",  # Try with extra user ID prefix
+            f"custom/{filename}",
+            f"custom/{user_id}_{filename}",
+            filename,
+            f"{user_id}_{filename}"
+        ]
+        
+        blob = None
+        for path in possible_paths:
+            logger.info(f"Checking GCS path: {path}")
+            temp_blob = bucket.blob(path)
+            if temp_blob.exists():
+                logger.info(f"Found file in GCS at: {path}")
+                blob = temp_blob
+                break
+        
+        if not blob:
+            # If not in GCS, check local file with both naming patterns
+            local_paths = [
+                os.path.join(app.config['UPLOAD_FOLDER'], 'custom', filename),
+                os.path.join(app.config['UPLOAD_FOLDER'], 'custom', f"{user_id}_{filename}")
+            ]
             
-        return send_from_directory(os.path.join(app.config['UPLOAD_FOLDER'], 'custom'), filename)
+            for local_path in local_paths:
+                logger.info(f"Checking local path: {local_path}")
+                if os.path.exists(local_path):
+                    logger.info(f"Found file locally, uploading to GCS")
+                    # Upload to GCS if found locally
+                    blob = bucket.blob(f"highlightMusic/custom/{filename}")
+                    blob.upload_from_filename(local_path)
+                    break
+            
+            if not blob:
+                logger.error(f"File not found in GCS or locally: {filename}")
+                return jsonify({'success': False, 'message': 'File not found'}), 404
+        
+        # Generate a signed URL valid for 1 hour
+        signed_url = blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(hours=1),
+            method="GET"
+        )
+        logger.info(f"Generated signed URL for {filename}")
+        
+        # Redirect to the signed URL
+        return redirect(signed_url)
+        
     except Exception as e:
         logger.error(f"Error serving custom audio: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': 'Failed to load audio file'}), 500

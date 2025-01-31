@@ -207,6 +207,7 @@ function ShowcaseCompilation() {
       setIsLoading(true);
       setError(null);
       setProgress('Starting compilation...');
+      setOutputUri(null); // Reset the output video when starting new compilation
       
       const selectedVideoUrls = savedVideos
         .filter(video => selectedVideos.includes(video.id))
