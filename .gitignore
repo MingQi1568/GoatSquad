@@ -815,3 +815,4 @@ backend/knn_model.pkl
 backend/knn_model.pkl
 
 backend/upload_music.py
+backend/static/audio/custom/

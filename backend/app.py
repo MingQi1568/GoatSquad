@@ -844,14 +844,79 @@ def handle_saved_videos(current_user):
     if request.method == 'GET':
         try:
             saved_videos = SavedVideo.query.filter_by(user_id=current_user.client_id).all()
+            
+            # Initialize GCS client
+            storage_client = storage.Client()
+            bucket = storage_client.bucket('goatbucket1')
+            
+            videos_with_signed_urls = []
+            for video in saved_videos:
+                try:
+                    # Extract blob path from video URL
+                    video_url = video.video_url
+                    blob_path = None
+                    
+                    if video_url.startswith('gs://'):
+                        # Handle gs:// URLs
+                        parts = video_url.replace('gs://', '').split('/', 1)
+                        if len(parts) == 2:
+                            blob_path = parts[1]
+                    elif 'storage.googleapis.com' in video_url:
+                        # Handle storage.googleapis.com URLs
+                        parts = video_url.split('goatbucket1/')
+                        if len(parts) == 2:
+                            blob_path = parts[1]
+                    elif video_url.startswith('completeHighlights/'):
+                        # Handle direct blob paths
+                        blob_path = video_url
+                    else:
+                        # For MLB video URLs, use them directly
+                        videos_with_signed_urls.append({
+                            'id': video.id,
+                            'videoUrl': video_url,
+                            'title': video.title,
+                            'createdAt': video.created_at.isoformat() if video.created_at else None
+                        })
+                        continue
+                    
+                    if blob_path:
+                        # Generate signed URL for GCS objects
+                        blob = bucket.blob(blob_path)
+                        if blob.exists():
+                            signed_url = blob.generate_signed_url(
+                                version="v4",
+                                expiration=datetime.timedelta(hours=1),
+                                method="GET"
+                            )
+                            videos_with_signed_urls.append({
+                                'id': video.id,
+                                'videoUrl': signed_url,
+                                'title': video.title,
+                                'createdAt': video.created_at.isoformat() if video.created_at else None
+                            })
+                        else:
+                            logger.warning(f"Video file not found in GCS: {blob_path}")
+                            # Still include the video with original URL if blob doesn't exist
+                            videos_with_signed_urls.append({
+                                'id': video.id,
+                                'videoUrl': video_url,
+                                'title': video.title,
+                                'createdAt': video.created_at.isoformat() if video.created_at else None
+                            })
+                    
+                except Exception as e:
+                    logger.error(f"Error processing video {video.id}: {str(e)}")
+                    # Include the video with original URL if processing fails
+                    videos_with_signed_urls.append({
+                        'id': video.id,
+                        'videoUrl': video.video_url,
+                        'title': video.title,
+                        'createdAt': video.created_at.isoformat() if video.created_at else None
+                    })
+            
             return jsonify({
                 'success': True,
-                'videos': [{
-                    'id': video.id,
-                    'videoUrl': video.video_url,
-                    'title': video.title,
-                    'createdAt': video.created_at.isoformat() if video.created_at else None
-                } for video in saved_videos]
+                'videos': videos_with_signed_urls
             })
         except Exception as e:
             logger.error(f"Error fetching saved videos: {str(e)}", exc_info=True)
