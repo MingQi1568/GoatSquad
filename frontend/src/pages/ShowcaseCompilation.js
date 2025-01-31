@@ -16,6 +16,9 @@ function ShowcaseCompilation() {
   const [playingPreview, setPlayingPreview] = useState(null);
   const [customTracks, setCustomTracks] = useState([]);
   const [isUploadingMusic, setIsUploadingMusic] = useState(false);
+  const [videoQuality, setVideoQuality] = useState('standard');
+  const [originalVolume, setOriginalVolume] = useState(70); // Default 70%
+  const [musicVolume, setMusicVolume] = useState(30); // Default 30%
   const audioRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -207,13 +210,13 @@ function ShowcaseCompilation() {
       setIsLoading(true);
       setError(null);
       setProgress('Starting compilation...');
-      setOutputUri(null); // Reset the output video when starting new compilation
+      setOutputUri(null);
       
       const selectedVideoUrls = savedVideos
         .filter(video => selectedVideos.includes(video.id))
         .map(video => video.videoUrl);
 
-      console.log('Selected video URLs:', selectedVideoUrls); // Debug log
+      console.log('Selected video URLs:', selectedVideoUrls);
 
       if (selectedVideoUrls.some(url => !url)) {
         throw new Error('Some selected videos have invalid URLs');
@@ -225,7 +228,10 @@ function ShowcaseCompilation() {
         `${process.env.REACT_APP_BACKEND_URL}/api/showcase/compile`,
         {
           videoUrls: selectedVideoUrls,
-          audioTrack: selectedTrack
+          audioTrack: selectedTrack,
+          quality: videoQuality,
+          originalVolume: originalVolume / 100, // Convert to decimal
+          musicVolume: musicVolume / 100 // Convert to decimal
         },
         {
           headers: {
@@ -234,7 +240,7 @@ function ShowcaseCompilation() {
         }
       );
 
-      console.log('Compilation response:', response.data); // Debug log
+      console.log('Compilation response:', response.data);
 
       if (response.data.success) {
         setProgress('Compilation complete! Processing video...');
@@ -244,7 +250,7 @@ function ShowcaseCompilation() {
         throw new Error(response.data.message || 'Failed to compile showcase');
       }
     } catch (err) {
-      console.error('Compilation error:', err); // Detailed error logging
+      console.error('Compilation error:', err);
       setError(err.message || 'Failed to compile showcase');
       toast.error(err.message || 'Failed to compile showcase');
     } finally {
@@ -533,6 +539,94 @@ function ShowcaseCompilation() {
                   ))}
                 </div>
               </div>
+
+              {/* Video Quality Selection */}
+              <div className="space-y-4">
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  <TranslatedText text="Video Quality" />
+                </h2>
+                <div className="grid grid-cols-3 gap-4">
+                  <button
+                    onClick={() => setVideoQuality('fast')}
+                    className={`p-4 rounded-lg border transition-all text-center ${
+                      videoQuality === 'fast'
+                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                        : 'border-gray-200 dark:border-gray-700 hover:border-blue-300'
+                    }`}
+                  >
+                    <div className="font-medium text-gray-900 dark:text-white">Fast</div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">Lower quality, faster processing</p>
+                  </button>
+                  <button
+                    onClick={() => setVideoQuality('standard')}
+                    className={`p-4 rounded-lg border transition-all text-center ${
+                      videoQuality === 'standard'
+                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                        : 'border-gray-200 dark:border-gray-700 hover:border-blue-300'
+                    }`}
+                  >
+                    <div className="font-medium text-gray-900 dark:text-white">Standard</div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">Balanced quality and speed</p>
+                  </button>
+                  <button
+                    onClick={() => setVideoQuality('high')}
+                    className={`p-4 rounded-lg border transition-all text-center ${
+                      videoQuality === 'high'
+                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                        : 'border-gray-200 dark:border-gray-700 hover:border-blue-300'
+                    }`}
+                  >
+                    <div className="font-medium text-gray-900 dark:text-white">High</div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">Best quality, slower processing</p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Audio Volume Control */}
+              {selectedTrack && (
+                <div className="space-y-4">
+                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                    <TranslatedText text="Audio Mix" />
+                  </h2>
+                  <div className="space-y-6">
+                    {/* Original Audio Volume */}
+                    <div className="space-y-2">
+                      <div className="flex justify-between">
+                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                          <TranslatedText text="Original Video Volume" />
+                        </label>
+                        <span className="text-sm text-gray-500">{originalVolume}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={originalVolume}
+                        onChange={(e) => setOriginalVolume(parseInt(e.target.value))}
+                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+                      />
+                    </div>
+
+                    {/* Background Music Volume */}
+                    <div className="space-y-2">
+                      <div className="flex justify-between">
+                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                          <TranslatedText text="Background Music Volume" />
+                        </label>
+                        <span className="text-sm text-gray-500">{musicVolume}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={musicVolume}
+                        onChange={(e) => setMusicVolume(parseInt(e.target.value))}
+                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Compile Button */}
               <button

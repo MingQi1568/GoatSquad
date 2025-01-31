@@ -16,7 +16,7 @@ vertexai.init(project=691596640324, location="us-central1")
 
 model = GenerativeModel("gemini-2.0-flash-exp")
 
-def generate_videos(video_urls, user_id, audio_url=None):
+def generate_videos(video_urls, user_id, audio_url=None, quality='standard'):
     """
     Generate a compilation video with audio from GCS
     
@@ -24,12 +24,42 @@ def generate_videos(video_urls, user_id, audio_url=None):
         video_urls: List of video URLs to compile
         user_id: User ID for the output filename
         audio_url: GCS URL for the background audio track (e.g. gs://bucket/path/to/audio.mp3)
+        quality: Video quality setting ('fast', 'standard', or 'high')
     """
     if not video_urls:
         raise ValueError("No video URLs provided")
 
     print(f"Processing {len(video_urls)} videos for user {user_id}")
     print(f"Using background audio: {audio_url}")
+    print(f"Quality setting: {quality}")
+    
+    # Quality settings mapping
+    quality_settings = {
+        'fast': {
+            'preset': 'ultrafast',
+            'crf': 28,
+            'video_bitrate': '2500k',
+            'audio_bitrate': '128k',
+            'resolution': (480, None)  # 480p
+        },
+        'standard': {
+            'preset': 'medium',
+            'crf': 23,
+            'video_bitrate': '5000k',
+            'audio_bitrate': '192k',
+            'resolution': (720, None)  # 720p
+        },
+        'high': {
+            'preset': 'slow',
+            'crf': 18,
+            'video_bitrate': '8000k',
+            'audio_bitrate': '320k',
+            'resolution': (1080, None)  # 1080p
+        }
+    }
+    
+    # Get quality settings
+    settings = quality_settings.get(quality, quality_settings['standard'])
     
     # Process videos in parallel
     from concurrent.futures import ThreadPoolExecutor
@@ -48,14 +78,14 @@ def generate_videos(video_urls, user_id, audio_url=None):
             start_time = float(clipTime[0])
             end_time = float(clipTime[1])
             
-            # Load and process video
-            clip = load_remote_video_with_audio(video, start_time, end_time)
+            # Load and process video with quality settings
+            clip = load_remote_video_with_audio(video, start_time, end_time, settings)
             return clip
             
         except Exception as e:
             print(f"Error processing video {index + 1}: {str(e)}")
             # Return a default 3-second clip if processing fails
-            return load_remote_video_with_audio(video, 0.0, 3.0)
+            return load_remote_video_with_audio(video, 0.0, 3.0, settings)
     
     # Process videos in parallel using ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=min(4, len(video_urls))) as executor:
@@ -114,17 +144,17 @@ def generate_videos(video_urls, user_id, audio_url=None):
     print("Uploading final video...")
     output_path = f"completeHighlights/{user_id}_{int(datetime.datetime.now().timestamp())}.mp4"
     
-    # Export with optimized settings
+    # Export with quality settings
     with NamedTemporaryFile(suffix='.mp4', delete=False) as temp_output:
         final_video.write_videofile(
             temp_output.name,
             codec='libx264',
             audio_codec='aac',
-            preset='ultrafast',
+            preset=settings['preset'],
             threads=0,
             fps=30,
-            bitrate='5000k',
-            audio_bitrate='192k'  # Increased audio bitrate for better quality
+            bitrate=settings['video_bitrate'],
+            audio_bitrate=settings['audio_bitrate']
         )
         
         # Upload to GCS
@@ -220,35 +250,35 @@ def get_engaging_moments(video_uri):
         print(f"Error in get_engaging_moments: {str(e)}")
         return "0.0,10.0"  # Default to 10 seconds
 
-def load_remote_video_with_audio(url, start_time, end_time):
-    """Loads a remote MP4 file with both video and audio"""
+def load_remote_video_with_audio(url, start_time, end_time, settings):
+    """Loads a remote MP4 file with both video and audio using quality settings"""
     print(f"Loading video from {url} (time: {start_time} to {end_time})")
     
     # Create temporary file for video
     temp_video = NamedTemporaryFile(delete=False, suffix=".mp4")
 
     try:
-        # Download and trim video with sound using ffmpeg with optimized settings
+        # Download and trim video with sound using ffmpeg with quality settings
         (
             ffmpeg
             .input(url, ss=start_time, to=end_time)
             .output(temp_video.name, 
                 vcodec="libx264", 
                 acodec="aac",
-                preset="ultrafast",  # Fastest encoding
-                crf=28,  # Lower quality but faster encoding
-                audio_bitrate="128k",  # Lower audio quality but faster
+                preset=settings['preset'],
+                crf=settings['crf'],
+                audio_bitrate=settings['audio_bitrate'],
                 threads=0  # Use all available CPU threads
             )
             .overwrite_output()
             .run(capture_stdout=True, capture_stderr=True)
         )
 
-        # Load the video in moviepy with optimized settings
+        # Load the video in moviepy with quality settings
         video_clip = mp.VideoFileClip(
             temp_video.name,
             audio=True,  # Load audio directly with video
-            target_resolution=(720, None),  # Reduce resolution for faster processing
+            target_resolution=settings['resolution'],  # Apply resolution setting
             fps_source="tbr"  # Use target bitrate as FPS source
         )
 
