@@ -1101,6 +1101,46 @@ def serve_custom_audio(current_user, filename):
         logger.error(f"Error serving custom audio: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': 'Failed to load audio file'}), 500
 
+@app.route('/api/showcase/download/<user_id>', methods=['GET'])
+@token_required
+def download_showcase(current_user, user_id):
+    """Download showcase video endpoint"""
+    try:
+        logger.info(f"Download requested for user_id: {user_id}, current_user: {current_user.client_id}")
+        if str(current_user.client_id) != str(user_id):
+            return jsonify({'success': False, 'message': 'Unauthorized'}), 403
+            
+        # Initialize GCS client
+        storage_client = storage.Client()
+        bucket = storage_client.bucket("goatbucket1")
+        
+        # List blobs with prefix to find the latest video for this user
+        prefix = f"completeHighlights/{user_id}"
+        blobs = list(bucket.list_blobs(prefix=prefix))
+        
+        if not blobs:
+            logger.error(f"No videos found for user {user_id}")
+            return jsonify({'success': False, 'message': 'Video not found'}), 404
+            
+        # Get the most recent video (last in list)
+        blob = blobs[-1]
+        logger.info(f"Found video: {blob.name}")
+            
+        # Get the video content
+        logger.info("Downloading video content...")
+        video_content = blob.download_as_bytes()
+        logger.info(f"Downloaded {len(video_content)} bytes")
+        
+        # Create response with proper headers
+        response = Response(video_content)
+        response.headers['Content-Type'] = 'video/mp4'
+        response.headers['Content-Disposition'] = f'attachment; filename=highlight-reel-{user_id}.mp4'
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error downloading showcase: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 if __name__ == '__main__':
     app.run(
         host='0.0.0.0', 

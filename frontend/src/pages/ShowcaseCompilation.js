@@ -252,6 +252,66 @@ function ShowcaseCompilation() {
     }
   };
 
+  const handleDownload = async () => {
+    try {
+      // Extract just the user ID from the URI
+      // From format: https://storage.googleapis.com/goatbucket1/completeHighlights/1_1738349227.mp4
+      const userId = outputUri.split('/completeHighlights/')[1].split('_')[0];
+      console.log('Downloading for user ID:', userId);
+      console.log('Full output URI:', outputUri);
+      
+      const response = await fetch(
+        `${process.env.REACT_APP_BACKEND_URL}/api/showcase/download/${userId}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+          }
+        }
+      );
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `Download failed with status: ${response.status}`);
+      }
+      
+      // Check content type
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('video/mp4')) {
+        console.error('Unexpected content type:', contentType);
+      }
+      
+      // Get the blob from response
+      const blob = await response.blob();
+      console.log('Downloaded blob size:', blob.size);
+      
+      if (blob.size === 0) {
+        throw new Error('Downloaded file is empty');
+      }
+      
+      // Create download link
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      
+      // Set filename
+      const filename = `highlight-reel-${new Date().toISOString().split('T')[0]}.mp4`;
+      link.setAttribute('download', filename);
+      
+      // Trigger download
+      document.body.appendChild(link);
+      link.click();
+      
+      // Cleanup
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(downloadUrl);
+      
+      toast.success('Download started!');
+    } catch (error) {
+      console.error('Download error:', error);
+      toast.error(`Failed to download video: ${error.message}`);
+    }
+  };
+
   return (
     <PageTransition>
       <div className="min-h-screen bg-gray-100 dark:bg-gray-900 py-12 px-4 sm:px-6 lg:px-8">
@@ -519,6 +579,28 @@ function ShowcaseCompilation() {
                       Your browser does not support the video tag.
                     </video>
                   </div>
+                  
+                  {/* Add download button */}
+                  <div className="mt-4 flex justify-center">
+                    <button
+                      onClick={handleDownload}
+                      className="inline-flex items-center px-4 py-2 border border-transparent 
+                                 rounded-md shadow-sm text-sm font-medium text-white 
+                                 bg-blue-600 hover:bg-blue-700 focus:outline-none 
+                                 focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                    >
+                      <svg 
+                        className="mr-2 -ml-1 h-5 w-5" 
+                        xmlns="http://www.w3.org/2000/svg" 
+                        viewBox="0 0 20 20" 
+                        fill="currentColor"
+                      >
+                        <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
+                      </svg>
+                      <TranslatedText text="Download Highlight Reel" />
+                    </button>
+                  </div>
+                  
                   <p className="mt-4 text-sm">
                     <TranslatedText text="Note: The video may take a few minutes to be fully processed and available for viewing." />
                   </p>
