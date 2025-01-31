@@ -8,6 +8,7 @@ import TranslatedText from '../components/TranslatedText';
 function SavedVideos() {
   const [videos, setVideos] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [playingVideo, setPlayingVideo] = useState(null);
   const { user } = useAuth();
 
   useEffect(() => {
@@ -39,6 +40,14 @@ function SavedVideos() {
     } catch (error) {
       console.error('Error removing video:', error);
       toast.error('Failed to remove video');
+    }
+  };
+
+  const handleVideoPreview = (videoId) => {
+    if (playingVideo === videoId) {
+      setPlayingVideo(null);
+    } else {
+      setPlayingVideo(videoId);
     }
   };
 
@@ -80,17 +89,45 @@ function SavedVideos() {
                 className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden
                          transition-transform hover:-translate-y-1 duration-200"
               >
-                <div className="relative">
+                <div className="relative aspect-video group">
                   <video
-                    className="w-full h-48 object-cover"
+                    className="w-full h-full object-cover"
+                    src={video.videoUrl}
                     poster="https://via.placeholder.com/768x432.png?text=Video+Thumbnail"
+                    controls={playingVideo === video.id}
+                    autoPlay={playingVideo === video.id}
+                    onEnded={() => setPlayingVideo(null)}
+                  />
+                  <div 
+                    className={`absolute inset-0 flex items-center justify-center 
+                      ${playingVideo === video.id ? 'hidden' : 'group-hover:bg-black/50'}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleVideoPreview(video.id);
+                    }}
                   >
-                    <source src={video.videoUrl} type="video/mp4" />
-                  </video>
+                    <button
+                      className={`p-3 rounded-full bg-white/90 text-gray-900 
+                        opacity-0 group-hover:opacity-100 transition-opacity
+                        hover:bg-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500`}
+                    >
+                      {playingVideo === video.id ? (
+                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+                        </svg>
+                      ) : (
+                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      )}
+                    </button>
+                  </div>
                   <button
                     onClick={() => handleRemoveVideo(video.id)}
-                    className="absolute top-2 right-2 p-1 bg-red-500 text-white rounded-full
-                             hover:bg-red-600 transition-colors"
+                    className="absolute top-2 right-2 p-1.5 bg-red-500 text-white rounded-full
+                             hover:bg-red-600 transition-colors z-10"
                     title="Remove video"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -106,13 +143,6 @@ function SavedVideos() {
                   <p className="text-sm text-gray-600 dark:text-gray-400">
                     {new Date(video.createdAt).toLocaleDateString()}
                   </p>
-                  <button
-                    onClick={() => window.open(video.videoUrl, '_blank')}
-                    className="mt-3 w-full bg-blue-500 text-white py-2 px-4 rounded
-                             hover:bg-blue-600 transition-colors"
-                  >
-                    <TranslatedText text="Watch Video" />
-                  </button>
                 </div>
               </div>
             ))}
