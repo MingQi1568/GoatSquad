@@ -13,6 +13,7 @@ import Profile from './pages/Profile';
 import Register from './pages/Register';
 import { AnimatePresence } from 'framer-motion';
 import RecommendationsPage from './pages/RecommendationsPage';
+import ShowcaseCompilation from './pages/ShowcaseCompilation';
 import SavedVideos from './pages/SavedVideos';
 import { Toaster } from 'react-hot-toast';
 
@@ -64,6 +65,13 @@ function AnimatedRoutes() {
           <ProtectedRoute>
             <MainLayout>
               <RecommendationsPage />
+            </MainLayout>
+          </ProtectedRoute>
+        } />
+        <Route path="/showcase-compilation" element={
+          <ProtectedRoute>
+            <MainLayout>
+              <ShowcaseCompilation />
             </MainLayout>
           </ProtectedRoute>
         } />
