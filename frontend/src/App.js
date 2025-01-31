@@ -13,6 +13,8 @@ import Profile from './pages/Profile';
 import Register from './pages/Register';
 import { AnimatePresence } from 'framer-motion';
 import RecommendationsPage from './pages/RecommendationsPage';
+import SavedVideos from './pages/SavedVideos';
+import { Toaster } from 'react-hot-toast';
 
 // Create a wrapper component that uses useLocation
 function AnimatedRoutes() {
@@ -65,6 +67,13 @@ function AnimatedRoutes() {
             </MainLayout>
           </ProtectedRoute>
         } />
+        <Route path="/saved-videos" element={
+          <ProtectedRoute>
+            <MainLayout>
+              <SavedVideos />
+            </MainLayout>
+          </ProtectedRoute>
+        } />
       </Routes>
     </AnimatePresence>
   );
@@ -76,6 +85,22 @@ function App() {
       <AuthProvider>
         <Router>
           <AnimatedRoutes />
+          <Toaster 
+            position="top-right"
+            toastOptions={{
+              duration: 3000,
+              style: {
+                background: '#333',
+                color: '#fff',
+              },
+              success: {
+                duration: 3000,
+                theme: {
+                  primary: '#4aed88',
+                }
+              },
+            }}
+          />
         </Router>
       </AuthProvider>
     </LanguageProvider>

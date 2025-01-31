@@ -59,5 +59,39 @@ export const userService = {
       }
       throw error;
     }
+  },
+
+  // Saved Videos Management
+  getSavedVideos: async () => {
+    try {
+      const response = await axios.get(`${API_URL}/api/videos/saved`);
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching saved videos:', error);
+      throw error;
+    }
+  },
+
+  saveVideo: async (videoUrl, title) => {
+    try {
+      const response = await axios.post(`${API_URL}/api/videos/saved`, {
+        videoUrl,
+        title
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Error saving video:', error);
+      throw error;
+    }
+  },
+
+  removeSavedVideo: async (videoId) => {
+    try {
+      const response = await axios.delete(`${API_URL}/api/videos/saved?id=${videoId}`);
+      return response.data;
+    } catch (error) {
+      console.error('Error removing saved video:', error);
+      throw error;
+    }
   }
 }; 

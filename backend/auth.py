@@ -17,6 +17,17 @@ db = SQLAlchemy()
 # At the top after imports
 print("10. Auth.py imported, directory:", os.getcwd())
 
+class SavedVideo(db.Model):
+    __tablename__ = 'saved_videos'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('client_info.client_id'), nullable=False)
+    video_url = db.Column(db.String(500), nullable=False)
+    title = db.Column(db.String(200))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    user = db.relationship('User', backref=db.backref('saved_videos', lazy=True))
+
 class User(db.Model):
     __tablename__ = 'client_info'  # Your existing table name
     
@@ -41,9 +52,15 @@ class User(db.Model):
             'timezone': self.timezone,
             'avatarUrl': self.avatarurl,
             'preferences': {
-                'teams': self.followed_teams or [],  # Changed from favorite_team
-                'players': self.followed_players or []  # Changed from favorite_player
-            }
+                'teams': self.followed_teams or [],
+                'players': self.followed_players or []
+            },
+            'savedVideos': [{
+                'id': video.id,
+                'videoUrl': video.video_url,
+                'title': video.title,
+                'createdAt': video.created_at.isoformat() if video.created_at else None
+            } for video in self.saved_videos]
         }
 
     @staticmethod
