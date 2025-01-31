@@ -638,6 +638,10 @@ def get_video_url_endpoint():
 @token_required
 def compile_showcase(current_user):
     try:
+        # Get request data
+        data = request.get_json() or {}
+        audio_url = data.get('audio_url')  # Optional audio URL
+        
         # Get 10 random video URLs from mlb_highlights
         engine = create_engine(init_connection_pool())
         query = text("""
@@ -650,8 +654,8 @@ def compile_showcase(current_user):
             results = connection.execute(query).fetchall()
             video_urls = [row[0] for row in results]
 
-        # Call generate_videos with the URLs and user ID
-        output_uri = generate_videos(video_urls, current_user.client_id)
+        # Call generate_videos with the URLs, user ID, and optional audio
+        output_uri = generate_videos(video_urls, current_user.client_id, audio_url)
         
         return jsonify({
             'success': True,

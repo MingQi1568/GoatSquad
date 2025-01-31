@@ -10,31 +10,64 @@ import requests
 import io
 import os
 import tempfile
+import datetime
 
 vertexai.init(project=691596640324, location="us-central1")
 
-model = GenerativeModel("gemini-1.5-flash-002")
+model = GenerativeModel("gemini-2.0-flash-exp")
 
-def generate_videos(video_urls,user_id):
+def generate_videos(video_urls, user_id, audio_url=None):
+    """
+    Generate a compilation video with audio from GCS
+    
+    Args:
+        video_urls: List of video URLs to compile
+        user_id: User ID for the output filename
+    """
     video_uris = []
     i = 0
     for video in video_urls:
-        video_uris.append(download_to_gcs(video,"goatbucket1","videos/" + str(i)))
+        video_uris.append(download_to_gcs(video, "goatbucket1", f"videos/{i}"))
         i += 1
     
     clipStartTimes = []
+    clipEndTimes = []
     for uri in video_uris:
-        clipStartTimes.append(get_engaging_moments(uri))
+        clipTime = get_engaging_moments(uri).split(",")
+        clipStartTimes.append(float(clipTime[0]))
+        clipEndTimes.append(float(clipTime[1]))
     
     video_sections = []
     for i in range(len(video_urls)):
-        video_sections.append((video_urls[i],float(clipStartTimes[i]),float(clipStartTimes[i]) + 2))
+        video_sections.append((video_urls[i], float(clipStartTimes[i]), float(clipEndTimes[i])))
     
     # Load video clips with audio
     clips = [load_remote_video_with_audio(url, start, end) for url, start, end in video_sections]
 
-    # Concatenate the clips (video + audio)
+    # Concatenate the video clips
     final_video = mp.concatenate_videoclips(clips, method="compose")
+    
+    try:
+        # Download audio from GCS
+        storage_client = storage.Client()
+        bucket = storage_client.bucket("goatbucket1")
+        blob = bucket.blob("highlightMusic/thickOfIt.mp3")
+        
+        with NamedTemporaryFile(suffix='.mp3', delete=False) as temp_audio:
+            blob.download_to_filename(temp_audio.name)
+            
+            # Load audio and set duration to match video
+            background_audio = mp.AudioFileClip(temp_audio.name)
+            background_audio = background_audio.set_duration(final_video.duration)
+            
+            # Set the background audio
+            final_video = final_video.set_audio(background_audio)
+            
+            # Clean up temp file
+            os.unlink(temp_audio.name)
+    except Exception as e:
+        logger.error(f"Error applying background audio: {str(e)}")
+        # Continue with original audio if background audio fails
 
     output_path = f"completeHighlights/{user_id}"
     upload_video_to_gcs(final_video, "goatbucket1", output_path)
@@ -46,24 +79,48 @@ def generate_videos(video_urls,user_id):
 
 
 def get_engaging_moments(video_uri):
-    prompt = """
-    If the video is more than 30 seconds long, do not spent time analyzing it and simply return "0.0", else
-    Give me the most engaging two seconds of the reel. Please only capture key events and highlights. 
-    If you are not sure about any info, please do not make it up. 
-    Return the beginning of this two second period as a number with two decimal places. 
-    Simply answer with a number, like "1.3", and nothing else.
-    """
+    """Get engaging moments from a video using Gemini"""
+    try:
+        prompt = """
+                Give me the most engaging interval of the reel in miliseconds. Please capture key events for the highlight reel. I am trying to take portions of this clip to cut into a highlights reel, so choose the best section of this reel to be part of that compilation. Make sure to include an entire event in the time interval you give. Make the interval at least 3 seconds and at most 15.
+        If you are not sure about any info, please do not make it up. 
+        Return the beginning of this interval as a number in seconds with two decimal places, same with the end. 
+        Simply answer with a number, like "1.33,9.71", for seconds 1.33 - 9.71 and nothing else.
+        """
 
-    video_file = Part.from_uri(
-        uri=video_uri,
-        mime_type="video/mp4",
-    )
+        # Convert gs:// URI to a signed URL that Vertex AI can access
+        storage_client = storage.Client()
+        bucket_name = video_uri.split('/')[2]  # Extract bucket name from gs:// URI
+        blob_path = '/'.join(video_uri.split('/')[3:])  # Extract blob path
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(blob_path)
+        
+        # Generate a signed URL that's valid for 1 hour
+        signed_url = blob.generate_signed_url(
+            version="v4",
+            expiration=datetime.timedelta(hours=1),
+            method="GET"
+        )
 
-    contents = [video_file, prompt]
+        video_file = Part.from_uri(
+            uri=signed_url,  # Use signed URL instead of gs:// URI
+            mime_type="video/mp4"
+        )
 
-    response = model.generate_content(contents)
-    print(response.text)
-    return response.text
+        contents = [video_file, prompt]
+        response = model.generate_content(contents)
+        print(response.text)
+        
+        # If no valid response, return default interval
+        if not response.text or ',' not in response.text:
+            return "0.0,3.0"
+            
+        return response.text
+
+    except Exception as e:
+        print(f"Error in get_engaging_moments: {str(e)}")
+        # Return a default interval if analysis fails
+        return "0.0,3.0"
 
 def load_remote_video_with_audio(url, start_time, end_time):
     """Loads a remote MP4 file with both video and audio"""
