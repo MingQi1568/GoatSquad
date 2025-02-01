@@ -606,8 +606,8 @@ function ShowcaseCompilation() {
                         : 'border-gray-200 dark:border-gray-700 hover:border-blue-300'
                     }`}
                   >
-                    <div className="font-medium text-gray-900 dark:text-white">Fast</div>
-                    <p className="text-sm text-gray-600 dark:text-gray-400">Lower quality, faster processing</p>
+                    <div className="font-medium text-gray-900 dark:text-white">480p</div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">Faster processing</p>
                   </button>
                   <button
                     onClick={() => setVideoQuality('standard')}
@@ -617,8 +617,8 @@ function ShowcaseCompilation() {
                         : 'border-gray-200 dark:border-gray-700 hover:border-blue-300'
                     }`}
                   >
-                    <div className="font-medium text-gray-900 dark:text-white">Standard</div>
-                    <p className="text-sm text-gray-600 dark:text-gray-400">Balanced quality and speed</p>
+                    <div className="font-medium text-gray-900 dark:text-white">720p</div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">Balanced quality</p>
                   </button>
                   <button
                     onClick={() => setVideoQuality('high')}
@@ -628,8 +628,8 @@ function ShowcaseCompilation() {
                         : 'border-gray-200 dark:border-gray-700 hover:border-blue-300'
                     }`}
                   >
-                    <div className="font-medium text-gray-900 dark:text-white">High</div>
-                    <p className="text-sm text-gray-600 dark:text-gray-400">Best quality, slower processing</p>
+                    <div className="font-medium text-gray-900 dark:text-white">1080p</div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">Best quality</p>
                   </button>
                 </div>
               </div>

@@ -7,7 +7,7 @@ import requests
 from datetime import datetime, timedelta
 import os
 from google.cloud import translate_v2 as translate
-from auth import AuthService, token_required, db, init_admin, SavedVideo, CustomMusic
+from auth import AuthService, token_required, db, init_admin, SavedVideo, CustomMusic, VideoVote, VideoComment
 import grpc
 from routes.mlb import mlb
 from flask_migrate import Migrate
@@ -306,14 +306,52 @@ def get_model_recommendations():
         search = request.args.get('search', '').strip().lower()
 
         offset = (page - 1) * per_page
-        recs, has_more = run_main(table, user_id=user_id, num_recommendations=per_page, offset=offset)
+        
+        try:
+            # Try to get personalized recommendations first
+            recs, has_more = run_main(table, user_id=user_id, num_recommendations=per_page, offset=offset)
+        except Exception as e:
+            logger.warning(f"Could not get personalized recommendations for user {user_id}: {str(e)}")
+            # If personalized recommendations fail, fall back to default recommendations
+            engine = create_engine(init_connection_pool())
+            with engine.connect() as conn:
+                # Get random popular videos
+                base_query = """
+                    SELECT id as reel_id, COUNT(*) as view_count
+                    FROM mlb_highlights
+                    GROUP BY id
+                    ORDER BY view_count DESC, RANDOM()
+                    OFFSET :offset
+                    LIMIT :limit
+                """
+                
+                if search:
+                    base_query = """
+                        SELECT id as reel_id, COUNT(*) as view_count
+                        FROM mlb_highlights
+                        WHERE LOWER(title) LIKE :search OR LOWER(blurb) LIKE :search
+                        GROUP BY id
+                        ORDER BY view_count DESC, RANDOM()
+                        OFFSET :offset
+                        LIMIT :limit
+                    """
+                    results = conn.execute(text(base_query), {
+                        "search": f"%{search}%",
+                        "offset": offset,
+                        "limit": per_page + 1
+                    }).fetchall()
+                else:
+                    results = conn.execute(text(base_query), {
+                        "offset": offset,
+                        "limit": per_page + 1
+                    }).fetchall()
 
-        if search:
+                has_more = len(results) > per_page
+                recs = [{"reel_id": str(row[0])} for row in results[:per_page]]
+
+        if search and recs:
             reel_ids = [r["reel_id"] for r in recs]
-            if not reel_ids:
-                return jsonify({'success': True, 'recommendations': [], 'has_more': False})
-
-            reel_ids_str = ", ".join(str(rid) for rid in reel_ids)
+            reel_ids_str = ", ".join(f"'{rid}'" for rid in reel_ids)
 
             engine = create_engine(init_connection_pool())
             with engine.connect() as conn:
@@ -325,13 +363,13 @@ def get_model_recommendations():
                 """)
                 highlight_results = conn.execute(highlights_query, {"search": f"%{search}%"}).fetchall()
                 valid_ids = set(row[0] for row in highlight_results)
-            filtered_recs = [r for r in recs if r["reel_id"] in valid_ids]
+                filtered_recs = [r for r in recs if r["reel_id"] in valid_ids]
           
-            return jsonify({
-                'success': True,
-                'recommendations': filtered_recs,
-                'has_more': False  # or your own logic
-            })
+                return jsonify({
+                    'success': True,
+                    'recommendations': filtered_recs,
+                    'has_more': False
+                })
 
         if recs:
             return jsonify({
@@ -1204,6 +1242,165 @@ def download_showcase(current_user, user_id):
         
     except Exception as e:
         logger.error(f"Error downloading showcase: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/videos/<video_id>/vote', methods=['POST'])
+@token_required
+def vote_video(current_user, video_id):
+    """Submit a vote for a video"""
+    try:
+        data = request.get_json()
+        vote_type = data.get('type')
+
+        if vote_type not in ['up', 'down', 'none']:
+            return jsonify({'success': False, 'message': 'Invalid vote type'}), 400
+
+        # Check if user has already voted on this video
+        existing_vote = VideoVote.query.filter_by(
+            video_id=video_id,
+            user_id=current_user.client_id
+        ).first()
+
+        if existing_vote:
+            if vote_type == 'none':
+                # Remove the vote
+                db.session.delete(existing_vote)
+            else:
+                # Update the vote
+                existing_vote.vote_type = vote_type
+                existing_vote.updated_at = datetime.utcnow()
+        elif vote_type != 'none':
+            # Create new vote
+            new_vote = VideoVote(
+                video_id=video_id,
+                user_id=current_user.client_id,
+                vote_type=vote_type
+            )
+            db.session.add(new_vote)
+
+        db.session.commit()
+
+        # Get updated vote counts
+        upvotes = VideoVote.query.filter_by(video_id=video_id, vote_type='up').count()
+        downvotes = VideoVote.query.filter_by(video_id=video_id, vote_type='down').count()
+
+        return jsonify({
+            'success': True,
+            'message': 'Vote recorded successfully',
+            'score': upvotes - downvotes,
+            'total': upvotes + downvotes
+        })
+
+    except Exception as e:
+        logger.error(f"Error recording vote: {str(e)}", exc_info=True)
+        db.session.rollback()
+        return jsonify({'success': False, 'message': 'Failed to record vote'}), 500
+
+@app.route('/api/videos/<video_id>/votes', methods=['GET'])
+@token_required
+def get_video_votes(current_user, video_id):
+    """Get vote counts for a video"""
+    try:
+        # Get vote counts
+        upvotes = VideoVote.query.filter_by(video_id=video_id, vote_type='up').count()
+        downvotes = VideoVote.query.filter_by(video_id=video_id, vote_type='down').count()
+
+        # Get user's vote if any
+        user_vote = VideoVote.query.filter_by(
+            video_id=video_id,
+            user_id=current_user.client_id
+        ).first()
+
+        return jsonify({
+            'success': True,
+            'score': upvotes - downvotes,
+            'total': upvotes + downvotes,
+            'userVote': user_vote.vote_type if user_vote else None
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting votes: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': 'Failed to get votes'}), 500
+
+@app.route('/api/videos/<video_id>/comments', methods=['GET', 'POST'])
+@token_required
+def handle_video_comments(current_user, video_id):
+    """Get or add comments for a video"""
+    if request.method == 'GET':
+        try:
+            comments = VideoComment.query.filter_by(video_id=video_id)\
+                .order_by(VideoComment.created_at.desc())\
+                .all()
+            
+            return jsonify({
+                'success': True,
+                'comments': [comment.to_dict() for comment in comments]
+            })
+        except Exception as e:
+            logger.error(f"Error getting comments: {str(e)}", exc_info=True)
+            return jsonify({'success': False, 'message': 'Failed to get comments'}), 500
+
+    elif request.method == 'POST':
+        try:
+            data = request.get_json()
+            content = data.get('content')
+
+            if not content or not content.strip():
+                return jsonify({'success': False, 'message': 'Comment content is required'}), 400
+
+            new_comment = VideoComment(
+                video_id=video_id,
+                user_id=current_user.client_id,
+                content=content.strip()
+            )
+            db.session.add(new_comment)
+            db.session.commit()
+
+            return jsonify({
+                'success': True,
+                'comment': new_comment.to_dict()
+            })
+        except Exception as e:
+            logger.error(f"Error adding comment: {str(e)}", exc_info=True)
+            db.session.rollback()
+            return jsonify({'success': False, 'message': 'Failed to add comment'}), 500
+
+@app.route('/api/videos/comments/<comment_id>', methods=['PUT', 'DELETE'])
+@token_required
+def handle_single_comment(current_user, comment_id):
+    """Update or delete a specific comment"""
+    try:
+        comment = VideoComment.query.get(comment_id)
+        if not comment:
+            return jsonify({'success': False, 'message': 'Comment not found'}), 404
+
+        if comment.user_id != current_user.client_id:
+            return jsonify({'success': False, 'message': 'Unauthorized'}), 403
+
+        if request.method == 'DELETE':
+            db.session.delete(comment)
+            db.session.commit()
+            return jsonify({'success': True, 'message': 'Comment deleted successfully'})
+
+        elif request.method == 'PUT':
+            data = request.get_json()
+            content = data.get('content')
+
+            if not content or not content.strip():
+                return jsonify({'success': False, 'message': 'Comment content is required'}), 400
+
+            comment.content = content.strip()
+            comment.updated_at = datetime.utcnow()
+            db.session.commit()
+
+            return jsonify({
+                'success': True,
+                'comment': comment.to_dict()
+            })
+
+    except Exception as e:
+        logger.error(f"Error handling comment: {str(e)}", exc_info=True)
+        db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 500
 
 if __name__ == '__main__':
