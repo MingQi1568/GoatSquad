@@ -275,17 +275,23 @@ RANDOM_PLAYERS = ['Aaron Judge', 'Mookie Betts', 'Shohei Ohtani', 'Mike Trout', 
 @token_required
 def get_vector_recommendations(current_user):
     try:
+        start_param = request.args.get('start', 0)
+        try:
+            start = int(start_param)
+        except ValueError:
+            start = 0
+
         followed_teams = [team.get('name', '') for team in (current_user.followed_teams or [])]
         followed_players = [player.get('fullName', '') for player in (current_user.followed_players or [])]
         if not followed_teams:
-            followed_teams = random.sample(RANDOM_TEAMS, min(3, len(RANDOM_TEAMS)))  
+            followed_teams = random.sample(RANDOM_TEAMS, min(3, len(RANDOM_TEAMS)))
         if not followed_players:
-            followed_players = random.sample(RANDOM_PLAYERS, min(3, len(RANDOM_PLAYERS)))  
+            followed_players = random.sample(RANDOM_PLAYERS, min(3, len(RANDOM_PLAYERS)))
 
         query = f"Teams: {', '.join(followed_teams)}. Players: {', '.join(followed_players)}."
 
         if query: 
-            data = search_feature("embeddings", query, 5)
+            data = search_feature("embeddings", query, start)
             ids = [item['id'] for item in data]
             return jsonify({
                 'success': True,
@@ -295,7 +301,7 @@ def get_vector_recommendations(current_user):
     except Exception as e:
         logger.error(f"Error getting model recommendations: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
-
+    
 @app.route('/recommend/predict', methods=['GET'])
 def get_model_recommendations():
     try:
