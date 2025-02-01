@@ -107,59 +107,72 @@ function RecommendationsPage() {
 
   const fetchModelRecommendations = async (pageNum, theSearchTerm) => {
     if (!user?.id) return;
+    
     try {
       setIsLoading(true);
+      const token = localStorage.getItem("auth_token");
+      
+      const start = (pageNum - 1) * 5;
       const response = await fetch(
-        `${process.env.REACT_APP_BACKEND_URL}/recommend/predict?user_id=${user.id}&page=${pageNum}&per_page=5&search=${encodeURIComponent(
-          theSearchTerm
-        )}`
+        `${process.env.REACT_APP_BACKEND_URL}/recommend/vector?start=${start}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        }
       );
       const data = await response.json();
+      
       if (data.success && Array.isArray(data.recommendations)) {
         const newRecs = await Promise.all(
-          data.recommendations.map(async (rec) => {
-            if (!rec.reel_id) return null;
+          data.recommendations.map(async (id) => {
             try {
+              // Fetch video data using the same endpoint as fetchFollowRecommendations
               const videoRes = await fetch(
-                `${process.env.REACT_APP_BACKEND_URL}/api/mlb/video?play_id=${rec.reel_id}`
+                `${process.env.REACT_APP_BACKEND_URL}/api/mlb/video?play_id=${id}`,
+                {
+                  headers: { Authorization: `Bearer ${token}` },
+                }
               );
               const videoData = await videoRes.json();
 
+              // Generate description like fetchFollowRecommendations
               const generated = await fetchDescriptionFromGemini(
-                videoData.title || "Baseball highlight"
+                videoData.title || "MLB Highlight"
               );
 
-              if (!videoData.success) return null;
-
               return {
-                id: rec.reel_id,
+                id,
                 type: "video",
-                title: `${videoData.title} (model)`,
-                description: generated,
-                videoUrl: videoData.video_url,
-                upvotes: Math.floor(rec.predicted_score || 0),
+                title: videoData.success ? `${videoData.title} (model)` : "Model Recommendation",
+                description: videoData.success ? generated : "",
+                videoUrl: videoData.success ? videoData.video_url : null,
+                upvotes: 0,
                 downvotes: 0,
-                comments: [],
+                comments: []
               };
-            } catch (err) {
-              console.error("Error fetching single video data:", err);
+            } catch (error) {
+              console.error(`Error fetching video ${id}:`, error);
               return null;
             }
           })
         );
         const valid = newRecs.filter((r) => r);
+        
         if (pageNum === 1) {
           setModelRecommendations(valid);
         } else {
           setModelRecommendations((prev) => [...prev, ...valid]);
         }
+        
         setModelHasMore(data.has_more);
         setIsModelLoaded(true);
       } else {
         setModelHasMore(false);
       }
-    } catch (err) {
-      console.error("Error fetching model recs:", err);
+    } catch (error) {
+      console.error("Error fetching model recommendations:", error);
       setModelHasMore(false);
     } finally {
       setIsLoading(false);

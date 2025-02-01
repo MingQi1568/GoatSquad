@@ -273,6 +273,8 @@ def get_vector_recommendations(current_user):
         if query: 
             data = search_feature("embeddings", query, start)
             ids = [item['id'] for item in data]
+            print("diddy")
+            print(ids)
             return jsonify({
                 'success': True,
                 'recommendations': ids,
