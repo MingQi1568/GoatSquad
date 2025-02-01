@@ -144,6 +144,42 @@ def rag_recommend_pgvector(table, query_text, start=0):
 def search_feature(table, search, start):
     return rag_recommend_pgvector(table, search, start)
 
+def searchv2(table, search, amount, start=0):
+    engine = create_engine(DATABASE_URL)
+    query_embedding = generate_embeddings(search)
+
+    if not query_embedding:
+        print("Failed to generate query embedding.")
+        return []
+
+    query_embedding = np.array(query_embedding).tolist()
+
+    query = text(f"""
+        SELECT id, embedding <-> CAST(:embedding AS vector) AS distance
+        FROM {table}
+        ORDER BY distance ASC
+        LIMIT :amount OFFSET :start
+    """)
+
+    try:
+        with engine.connect() as connection:
+            results = connection.execute(
+                query, 
+                {
+                    "embedding": f"[{', '.join(map(str, query_embedding))}]",
+                    "amount": amount,
+                    "start": start
+                }
+            ).fetchall()
+
+            recommendations = [{"id": row[0], "distance": row[1]} for row in results]
+            print(recommendations)
+            return recommendations
+
+    except Exception as e:
+        print(f"Error performing RAG with pgvector: {e}")
+        return []
+    
 if __name__ == "__main__":
     followed_players = ['Shohei Ohtani', 'Mike Trout']
     followed_teams = ['Tampa Bay Rays', 'Houston Astros']
