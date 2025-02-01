@@ -7,14 +7,16 @@ import TranslatedText from "../components/TranslatedText";
 import { userService } from "../services/userService";
 import { videoService } from "../services/videoService";
 import { toast } from "react-hot-toast";
+import { usePreferences } from "../hooks/usePreferences";
 
 function RecommendationsPage() {
   // Replace the dummy data with user data from AuthContext
   const { user } = useAuth();
+  const { preferences, isLoading: preferencesLoading } = usePreferences();
 
-  // Get followed teams and players from user data
-  const followedTeams = user?.preferences?.teams || [];
-  const followedPlayers = user?.preferences?.players || [];
+  // Get followed teams and players from preferences
+  const followedTeams = preferences?.teams || [];
+  const followedPlayers = preferences?.players || [];
 
   // For upcoming events in the right sidebar
   const upcomingEvents = [
