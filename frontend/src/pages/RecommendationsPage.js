@@ -78,7 +78,7 @@ function RecommendationsPage() {
               id: rec.reel_id,
               type: "video",
               title: videoData.success
-                ? `${videoData.title} (follow)`
+                ? `${videoData.title}`
                 : "Followed Team/Player Highlight",
               description: videoData.success
                 ? generated
@@ -144,7 +144,7 @@ function RecommendationsPage() {
               return {
                 id,
                 type: "video",
-                title: videoData.success ? `${videoData.title} (model)` : "Model Recommendation",
+                title: videoData.success ? `${videoData.title}` : "Model Recommendation",
                 description: videoData.success ? generated : "",
                 videoUrl: videoData.success ? videoData.video_url : null,
                 upvotes: 0,
@@ -259,17 +259,79 @@ function RecommendationsPage() {
   }, [followHasMore, modelHasMore]);
 
   // Search logic
-  const handleSearchSubmit = (e) => {
+  const handleSearchSubmit = async (e) => {
     e.preventDefault();
+    if (!searchTerm.trim()) return;
+
     setIsSearching(true);
     setCurrentPage(1);
-    setFollowRecommendations([]);
-    setModelRecommendations([]);
-    fetchFollowRecommendations(1, searchTerm).then(() => {
-      fetchModelRecommendations(1, searchTerm).then(() => {
-        setIsSearching(false);
-      });
-    });
+    const token = localStorage.getItem("auth_token");
+
+    try {
+      // Get search results from vector search endpoint
+      const searchResponse = await fetch(
+        `${process.env.REACT_APP_BACKEND_URL}/recommend/search?search=${encodeURIComponent(searchTerm)}&amount=10`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      const searchData = await searchResponse.json();
+
+      if (searchData.success && Array.isArray(searchData.recommendations)) {
+        // Get video details for each recommendation
+        const videoPromises = searchData.recommendations.map(async (id) => {
+          const videoRes = await fetch(
+            `${process.env.REACT_APP_BACKEND_URL}/api/mlb/video?play_id=${id}`,
+            {
+              headers: { Authorization: `Bearer ${token}` },
+            }
+          );
+          const videoData = await videoRes.json();
+
+          // Generate description
+          const generated = await fetchDescriptionFromGemini(
+            videoData.title || "MLB Highlight"
+          );
+
+          return {
+            id,
+            type: "video",
+            title: videoData.success ? videoData.title : "Search Result",
+            description: videoData.success ? generated : "",
+            videoUrl: videoData.success ? videoData.video_url : null,
+            upvotes: 0,
+            downvotes: 0,
+            comments: []
+          };
+        });
+
+        const videos = await Promise.all(videoPromises);
+        const validVideos = videos.filter(v => v.videoUrl);
+
+        // Split results between follow and model recommendations
+        const halfLength = Math.ceil(validVideos.length / 2);
+        setFollowRecommendations(validVideos.slice(0, halfLength));
+        setModelRecommendations(validVideos.slice(halfLength));
+        
+        // Update pagination state
+        setHasMore(searchData.has_more);
+        setFollowHasMore(searchData.has_more);
+        setModelHasMore(searchData.has_more);
+      } else {
+        setFollowRecommendations([]);
+        setModelRecommendations([]);
+        setHasMore(false);
+        toast.error("No results found");
+      }
+    } catch (error) {
+      console.error("Error searching videos:", error);
+      toast.error("Error searching videos");
+    } finally {
+      setIsSearching(false);
+    }
   };
 
   // For expansions, new comment, etc. (omitted for brevity)
@@ -632,7 +694,7 @@ function RecommendationsPage() {
             {!isModelLoaded && (
               <div className="bg-blue-50 dark:bg-blue-900 p-4 rounded-lg mb-6">
                 <p className="text-blue-700 dark:text-blue-200">
-                  Loading personalized recommendations... Meanwhile, enjoy highlights from your favorites!
+                  Loading personalized recommendations...
                 </p>
               </div>
             )}
