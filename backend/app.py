@@ -303,8 +303,11 @@ def get_model_recommendations():
         page = int(request.args.get('page', default=1))
         per_page = int(request.args.get('per_page', default=5))
         table = request.args.get('table', default='user_ratings_db')
-        search = request.args.get('search', '').strip().lower()
+        search = request.args.get('search', '').strip()
 
+        # Break down search terms for better matching
+        search_terms = [term.lower() for term in search.split() if term]
+        
         offset = (page - 1) * per_page
         
         try:
@@ -317,36 +320,67 @@ def get_model_recommendations():
             # If personalized recommendations fail, fall back to default recommendations
             engine = create_engine(init_connection_pool())
             with engine.connect() as conn:
-                # Get random popular videos
-                base_query = """
-                    SELECT id as reel_id, COUNT(*) as view_count
-                    FROM mlb_highlights
-                    WHERE id IS NOT NULL
-                    GROUP BY id
-                    HAVING COUNT(*) > 0
-                    ORDER BY RANDOM()
-                    OFFSET :offset
-                    LIMIT :limit
-                """
-                
-                if search:
+                if search_terms:
+                    # Build dynamic search conditions for each term
+                    search_conditions = []
+                    params = {}
+                    for i, term in enumerate(search_terms):
+                        param_name = f"term_{i}"
+                        search_conditions.append(f"""
+                            (LOWER(title) LIKE :term_{i} OR 
+                             LOWER(blurb) LIKE :term_{i} OR 
+                             LOWER(player) LIKE :term_{i} OR
+                             LOWER(home_team) LIKE :term_{i} OR
+                             LOWER(away_team) LIKE :term_{i})
+                        """)
+                        params[f"term_{i}"] = f"%{term}%"
+                    
+                    search_clause = " AND ".join(search_conditions)
+                    
+                    base_query = f"""
+                        WITH matched_videos AS (
+                            SELECT 
+                                id as reel_id,
+                                title,
+                                blurb,
+                                COUNT(*) as view_count,
+                                CASE 
+                                    WHEN LOWER(title) = :exact_search THEN 3
+                                    WHEN LOWER(blurb) = :exact_search THEN 2
+                                    ELSE 0
+                                END as exact_match_score
+                            FROM mlb_highlights
+                            WHERE id IS NOT NULL
+                            AND ({search_clause})
+                            GROUP BY id, title, blurb
+                            HAVING COUNT(*) > 0
+                        )
+                        SELECT 
+                            reel_id,
+                            view_count
+                        FROM matched_videos
+                        ORDER BY exact_match_score DESC, view_count DESC, RANDOM()
+                        OFFSET :offset
+                        LIMIT :limit
+                    """
+                    
+                    # Add the exact search parameter
+                    params['exact_search'] = search.lower()
+                    params['offset'] = offset
+                    params['limit'] = per_page + 1
+                    
+                    results = conn.execute(text(base_query), params).fetchall()
+                else:
                     base_query = """
                         SELECT id as reel_id, COUNT(*) as view_count
                         FROM mlb_highlights
                         WHERE id IS NOT NULL
-                        AND (LOWER(title) LIKE :search OR LOWER(blurb) LIKE :search)
                         GROUP BY id
                         HAVING COUNT(*) > 0
-                        ORDER BY RANDOM()
+                        ORDER BY view_count DESC, RANDOM()
                         OFFSET :offset
                         LIMIT :limit
                     """
-                    results = conn.execute(text(base_query), {
-                        "search": f"%{search}%",
-                        "offset": offset,
-                        "limit": per_page + 1
-                    }).fetchall()
-                else:
                     results = conn.execute(text(base_query), {
                         "offset": offset,
                         "limit": per_page + 1
@@ -355,19 +389,35 @@ def get_model_recommendations():
                 has_more = len(results) > per_page
                 recs = [{"reel_id": str(row[0])} for row in results[:per_page]]
 
-        if search and recs:
+        if search_terms and recs:
             reel_ids = [r["reel_id"] for r in recs]
             reel_ids_str = ", ".join(f"'{rid}'" for rid in reel_ids)
 
+            # Verify the results still match the search criteria
             engine = create_engine(init_connection_pool())
             with engine.connect() as conn:
+                search_conditions = []
+                params = {"search": f"%{search.lower()}%"}
+                for i, term in enumerate(search_terms):
+                    param_name = f"term_{i}"
+                    search_conditions.append(f"""
+                        (LOWER(title) LIKE :term_{i} OR 
+                         LOWER(blurb) LIKE :term_{i} OR 
+                         LOWER(player) LIKE :term_{i} OR
+                         LOWER(home_team) LIKE :term_{i} OR
+                         LOWER(away_team) LIKE :term_{i})
+                    """)
+                    params[param_name] = f"%{term}%"
+                
+                search_clause = " AND ".join(search_conditions)
+                
                 highlights_query = text(f"""
                     SELECT id, title
                     FROM mlb_highlights
                     WHERE id IN ({reel_ids_str})
-                      AND (LOWER(title) LIKE :search OR LOWER(blurb) LIKE :search)
+                    AND ({search_clause})
                 """)
-                highlight_results = conn.execute(highlights_query, {"search": f"%{search}%"}).fetchall()
+                highlight_results = conn.execute(highlights_query, params).fetchall()
                 valid_ids = set(row[0] for row in highlight_results)
                 filtered_recs = [r for r in recs if r["reel_id"] in valid_ids]
           
@@ -393,115 +443,128 @@ def get_model_recommendations():
 @app.route('/recommend/follow', methods=['GET'])
 @token_required
 def get_follow_recommendations(current_user):
-    """
-    Get recommendations based on followed teams and players,
-    optionally filtering with ?search=someTerm
-    """
     try:
         table = request.args.get('table', default='mlb_highlights')
         page = int(request.args.get('page', default=1))
         per_page = int(request.args.get('per_page', default=5))
-        search = request.args.get('search', '').strip().lower()
+        search = request.args.get('search', '').strip()
+        
+        # Break down search terms
+        search_terms = [term.lower() for term in search.split() if term]
 
-        # Must have a user
         if not current_user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
 
-        # Extract team names and player names from the JSON objects
         followed_teams = [team.get('name', '') for team in (current_user.followed_teams or [])]
         followed_players = [player.get('fullName', '') for player in (current_user.followed_players or [])]
 
         offset = (page - 1) * per_page
 
-        # If user has no follows, return random popular videos
-        if not followed_teams and not followed_players:
-            engine = create_engine(init_connection_pool())
-            with engine.connect() as conn:
+        engine = create_engine(init_connection_pool())
+        with engine.connect() as conn:
+            if not followed_teams and not followed_players:
+                # Build base query for users without follows
                 base_query = """
-                    SELECT id as reel_id, COUNT(*) as view_count
+                    SELECT id as reel_id, title, blurb, COUNT(*) as view_count
                     FROM mlb_highlights
                     WHERE id IS NOT NULL
-                    GROUP BY id
+                """
+                params = {}
+
+                if search_terms:
+                    search_conditions = []
+                    for i, term in enumerate(search_terms):
+                        search_conditions.append(f"""
+                            (LOWER(title) LIKE :term_{i} OR 
+                             LOWER(blurb) LIKE :term_{i} OR 
+                             LOWER(player) LIKE :term_{i} OR
+                             LOWER(home_team) LIKE :term_{i} OR
+                             LOWER(away_team) LIKE :term_{i})
+                        """)
+                        params[f"term_{i}"] = f"%{term}%"
+                    
+                    base_query += " AND " + " AND ".join(search_conditions)
+
+                base_query += """
+                    GROUP BY id, title, blurb
                     HAVING COUNT(*) > 0
-                    ORDER BY RANDOM()
+                    ORDER BY 
+                        CASE 
+                            WHEN LOWER(title) = :exact_title THEN 3
+                            WHEN LOWER(blurb) = :exact_blurb THEN 2
+                            ELSE 0
+                        END DESC,
+                        view_count DESC,
+                        RANDOM()
                     OFFSET :offset
                     LIMIT :limit
                 """
-                
-                if search:
-                    base_query = """
-                        SELECT id as reel_id, COUNT(*) as view_count
-                        FROM mlb_highlights
-                        WHERE id IS NOT NULL
-                        AND (LOWER(title) LIKE :search OR LOWER(blurb) LIKE :search)
-                        GROUP BY id
-                        HAVING COUNT(*) > 0
-                        ORDER BY RANDOM()
-                        OFFSET :offset
-                        LIMIT :limit
-                    """
-                    results = conn.execute(text(base_query), {
-                        "search": f"%{search}%",
-                        "offset": offset,
-                        "limit": per_page + 1
-                    }).fetchall()
-                else:
-                    results = conn.execute(text(base_query), {
-                        "offset": offset,
-                        "limit": per_page + 1
-                    }).fetchall()
 
-                has_more = len(results) > per_page
-                recommendations = [{"reel_id": str(row[0])} for row in results[:per_page]]
-                return jsonify({
-                    'success': True,
-                    'recommendations': recommendations,
-                    'has_more': has_more
+                params.update({
+                    "exact_title": search.lower(),
+                    "exact_blurb": search.lower(),
+                    "offset": offset,
+                    "limit": per_page + 1
                 })
 
-        # Build a dynamic WHERE clause to optionally filter by search
-        base_query = f"""
-            SELECT id as reel_id 
-            FROM {table}
-            WHERE id IS NOT NULL
-            AND (
-                player = ANY(:players) 
-                OR home_team = ANY(:teams) 
-                OR away_team = ANY(:teams)
-            )
-        """
-        # If we have a search term, add a filter
-        if search:
-            base_query += " AND (LOWER(title) LIKE :search OR LOWER(blurb) LIKE :search)"
+                results = conn.execute(text(base_query), params).fetchall()
+            else:
+                # Build base query for users with follows
+                base_query = """
+                    SELECT id as reel_id, title, blurb, COUNT(*) as view_count
+                    FROM mlb_highlights
+                    WHERE id IS NOT NULL
+                    AND (
+                        player = ANY(:players) 
+                        OR home_team = ANY(:teams) 
+                        OR away_team = ANY(:teams)
+                    )
+                """
+                params = {
+                    "players": followed_players,
+                    "teams": followed_teams
+                }
 
-        # Final ordering & pagination
-        base_query += """
-            GROUP BY id
-            HAVING COUNT(*) > 0
-            ORDER BY RANDOM()
-            OFFSET :offset
-            LIMIT :limit
-        """
+                if search_terms:
+                    search_conditions = []
+                    for i, term in enumerate(search_terms):
+                        search_conditions.append(f"""
+                            (LOWER(title) LIKE :term_{i} OR 
+                             LOWER(blurb) LIKE :term_{i} OR 
+                             LOWER(player) LIKE :term_{i} OR
+                             LOWER(home_team) LIKE :term_{i} OR
+                             LOWER(away_team) LIKE :term_{i})
+                        """)
+                        params[f"term_{i}"] = f"%{term}%"
+                    
+                    base_query += " AND " + " AND ".join(search_conditions)
 
-        # Build the param dict
-        param_dict = {
-            "players": followed_players,
-            "teams": followed_teams,
-            "offset": offset,
-            "limit": per_page + 1,  # get one extra to see if there's more
-        }
-        if search:
-            param_dict["search"] = f"%{search}%"
+                base_query += """
+                    GROUP BY id, title, blurb
+                    HAVING COUNT(*) > 0
+                    ORDER BY 
+                        CASE 
+                            WHEN LOWER(title) = :exact_title THEN 3
+                            WHEN LOWER(blurb) = :exact_blurb THEN 2
+                            ELSE 0
+                        END DESC,
+                        view_count DESC,
+                        RANDOM()
+                    OFFSET :offset
+                    LIMIT :limit
+                """
 
-        # Execute
-        engine = create_engine(init_connection_pool())
-        with engine.connect() as connection:
-            results = connection.execute(text(base_query), param_dict).fetchall()
+                params.update({
+                    "exact_title": search.lower(),
+                    "exact_blurb": search.lower(),
+                    "offset": offset,
+                    "limit": per_page + 1
+                })
+
+                results = conn.execute(text(base_query), params).fetchall()
 
             if results:
-                # Check if we got more than per_page
                 has_more = len(results) > per_page
-                # Slice off the extra
                 recommendations = [{"reel_id": str(row[0])} for row in results[:per_page]]
                 return jsonify({
                     'success': True,
