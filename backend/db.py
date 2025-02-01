@@ -106,19 +106,7 @@ def get_follow_vid(table, followed_players, followed_teams):
         print(f"Error fetching random video: {e}")
         return None
 
-@token_required
-def query_embedding(current_user):
-    followed_teams = [team.get('name', '') for team in (current_user.followed_teams or [])]
-    followed_players = [player.get('fullName', '') for player in (current_user.followed_players or [])]
-    if not followed_teams:
-        followed_teams = random.sample(RANDOM_TEAMS, min(3, len(RANDOM_TEAMS)))  
-    if not followed_players:
-        followed_players = random.sample(RANDOM_PLAYERS, min(3, len(RANDOM_PLAYERS)))  
-
-    query = f"Teams: {', '.join(followed_teams)}. Players: {', '.join(followed_players)}."
-    return query
-
-def rag_recommend_pgvector(table, query_text, top_k=5):
+def rag_recommend_pgvector(table, query_text, start=0):
     engine = create_engine(DATABASE_URL)
     query_embedding = generate_embeddings(query_text)
 
@@ -132,14 +120,17 @@ def rag_recommend_pgvector(table, query_text, top_k=5):
         SELECT id, embedding <-> CAST(:embedding AS vector) AS distance
         FROM {table}
         ORDER BY distance ASC
-        LIMIT :top_k
+        LIMIT 5 OFFSET :start
     """)
 
     try:
         with engine.connect() as connection:
             results = connection.execute(
                 query, 
-                {"embedding": f"[{', '.join(map(str, query_embedding))}]", "top_k": top_k}  
+                {
+                    "embedding": f"[{', '.join(map(str, query_embedding))}]",
+                    "start": start  
+                }
             ).fetchall()
 
             recommendations = [{"id": row[0], "distance": row[1]} for row in results]
@@ -150,14 +141,14 @@ def rag_recommend_pgvector(table, query_text, top_k=5):
         print(f"Error performing RAG with pgvector: {e}")
         return []
     
-def search_feature(table, search, top_k):
-    return rag_recommend_pgvector(table, search, top_k)
+def search_feature(table, search, start):
+    return rag_recommend_pgvector(table, search, start)
 
 if __name__ == "__main__":
     followed_players = ['Shohei Ohtani', 'Mike Trout']
     followed_teams = ['Tampa Bay Rays', 'Houston Astros']
     #print(get_follow_vid('mlb_highlights', followed_players, followed_teams))
-    search_feature("embeddings", "Player: Shohei", 5)
+    search_feature("embeddings", "Player: Shohei", 1)
 
     
 
