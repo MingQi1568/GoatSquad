@@ -8,6 +8,8 @@ import { userService } from "../services/userService";
 import { videoService } from "../services/videoService";
 import { toast } from "react-hot-toast";
 import { usePreferences } from "../hooks/usePreferences";
+import { format } from 'date-fns';
+import axios from 'axios';
 
 function RecommendationsPage() {
   // Replace the dummy data with user data from AuthContext
@@ -18,12 +20,9 @@ function RecommendationsPage() {
   const followedTeams = preferences?.teams || [];
   const followedPlayers = preferences?.players || [];
 
-  // For upcoming events in the right sidebar
-  const upcomingEvents = [
-    { id: 1, date: "Jan 20", event: "Spring Training Begins" },
-    { id: 2, date: "Feb 14", event: "First Preseason Game" },
-    { id: 3, date: "Mar 27", event: "Opening Day" },
-  ];
+  // Replace dummy upcomingEvents with real state
+  const [upcomingEvents, setUpcomingEvents] = useState([]);
+  const [eventsLoading, setEventsLoading] = useState(true);
 
   // ---------- Search-related state ----------
   const [searchTerm, setSearchTerm] = useState("");
@@ -490,14 +489,77 @@ function RecommendationsPage() {
     }
   }, [combinedRecommendations]);
 
+  // Add useEffect to fetch upcoming events
+  useEffect(() => {
+    const fetchUpcomingEvents = async () => {
+      if (!preferences?.teams?.length) {
+        setEventsLoading(false);
+        return;
+      }
+
+      try {
+        setEventsLoading(true);
+        const startDate = format(new Date(), 'yyyy-MM-dd');
+        const endDate = format(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd'); // 30 days ahead
+        
+        // Fetch games for all followed teams
+        const gamePromises = preferences.teams.map(team => 
+          axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/mlb/schedule`, {
+            params: {
+              teamId: team.id,
+              startDate,
+              endDate
+            }
+          })
+        );
+
+        const responses = await Promise.all(gamePromises);
+
+        // Process and combine all games
+        const allEvents = responses.flatMap(response => {
+          if (!response.data || !response.data.dates) return [];
+
+          const teamId = parseInt(response.config.params.teamId);
+          const team = preferences.teams.find(t => t.id === teamId);
+
+          return response.data.dates.flatMap(date => {
+            if (!date.games) return [];
+
+            return date.games.map(game => ({
+              id: game.gamePk,
+              date: format(new Date(game.gameDate), 'MMM d'),
+              event: `${game.teams.away.team.name} @ ${game.teams.home.team.name}`,
+              teamName: team.name,
+              isHome: game.teams.home.team.id === team.id,
+              fullDate: new Date(game.gameDate)
+            }));
+          });
+        });
+
+        // Sort by date and take first 5
+        const sortedEvents = allEvents
+          .sort((a, b) => a.fullDate - b.fullDate)
+          .slice(0, 5);
+
+        setUpcomingEvents(sortedEvents);
+      } catch (error) {
+        console.error('Error fetching upcoming events:', error);
+      } finally {
+        setEventsLoading(false);
+      }
+    };
+
+    fetchUpcomingEvents();
+  }, [preferences?.teams]);
+
   return (
     <PageTransition>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 mt-16">
         {/* Search Bar */}
-        <div className="mb-6">
+        <div className="mb-8">
           <form onSubmit={handleSearchSubmit} className="flex items-center space-x-2">
             <input
-              className="flex-1 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-2
+              className="flex-1 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-2.5
                          bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100
                          focus:ring-2 focus:ring-blue-500 focus:outline-none"
               placeholder="Search..."
@@ -507,7 +569,7 @@ function RecommendationsPage() {
             <button
               type="submit"
               disabled={isSearching}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700
+              className="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700
                          disabled:opacity-50 transition-colors"
             >
               {isSearching ? "Searching..." : "Search"}
@@ -515,20 +577,20 @@ function RecommendationsPage() {
           </form>
         </div>
 
-        <div className="grid grid-cols-12 gap-8">
+        <div className="grid grid-cols-12 gap-6 lg:gap-8">
           {/* LEFT SIDEBAR */}
-          <aside className="col-span-3 hidden lg:block">
+          <aside className="col-span-3 hidden lg:block space-y-6">
             <div className="sticky top-24 space-y-6">
               {/* Followed Teams */}
-              <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-4">
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
+              <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-5">
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
                   <TranslatedText text="Followed Teams" />
                 </h2>
                 {followedTeams.length > 0 ? (
                   followedTeams.map((team) => (
                     <div
                       key={team.id}
-                      className="py-2 border-b last:border-b-0 border-gray-200 dark:border-gray-700"
+                      className="py-2.5 border-b last:border-b-0 border-gray-200 dark:border-gray-700"
                     >
                       <span className="text-gray-800 dark:text-gray-200">{team.name}</span>
                     </div>
@@ -541,15 +603,15 @@ function RecommendationsPage() {
               </div>
 
               {/* Followed Players */}
-              <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-4">
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
+              <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-5">
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
                   <TranslatedText text="Followed Players" />
                 </h2>
                 {followedPlayers.length > 0 ? (
                   followedPlayers.map((player) => (
                     <div
                       key={player.id}
-                      className="py-2 border-b last:border-b-0 border-gray-200 dark:border-gray-700"
+                      className="py-2.5 border-b last:border-b-0 border-gray-200 dark:border-gray-700"
                     >
                       <span className="text-gray-800 dark:text-gray-200">
                         {player.fullName}
@@ -568,7 +630,7 @@ function RecommendationsPage() {
           {/* MAIN FEED */}
           <main className="col-span-12 lg:col-span-6 space-y-6">
             {!isModelLoaded && (
-              <div className="bg-blue-50 dark:bg-blue-900 p-4 rounded-lg mb-4">
+              <div className="bg-blue-50 dark:bg-blue-900 p-4 rounded-lg mb-6">
                 <p className="text-blue-700 dark:text-blue-200">
                   Loading personalized recommendations... Meanwhile, enjoy highlights from your favorites!
                 </p>
@@ -768,23 +830,43 @@ function RecommendationsPage() {
           {/* RIGHT SIDEBAR */}
           <aside className="col-span-3 hidden lg:block">
             <div className="sticky top-24">
-              <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-4">
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
-                  <TranslatedText text="Upcoming Events" />
+              <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-5">
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
+                  <TranslatedText text="Upcoming Games" />
                 </h2>
-                {upcomingEvents.map((event) => (
-                  <div
-                    key={event.id}
-                    className="py-2 border-b last:border-b-0 border-gray-200 dark:border-gray-700"
-                  >
-                    <span className="font-medium text-gray-900 dark:text-gray-100 mr-2">
-                      {event.date}
-                    </span>
-                    <span className="text-gray-700 dark:text-gray-300">
-                      <TranslatedText text={event.event} />
-                    </span>
+                {eventsLoading ? (
+                  <div className="space-y-4">
+                    {[1, 2, 3].map((i) => (
+                      <div key={i} className="animate-pulse">
+                        <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-3/4 mb-2"></div>
+                        <div className="h-3 bg-gray-100 dark:bg-gray-600 rounded w-1/2"></div>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                ) : upcomingEvents.length > 0 ? (
+                  upcomingEvents.map((event) => (
+                    <div
+                      key={event.id}
+                      className={`py-3 px-3 border-b last:border-b-0 border-gray-200 dark:border-gray-700 
+                        ${event.isHome ? 'bg-green-50 dark:bg-green-900/20' : ''} 
+                        rounded-md transition-colors duration-200`}
+                    >
+                      <span className="font-medium text-gray-900 dark:text-gray-100 mr-2">
+                        {event.date}
+                      </span>
+                      <span className="text-gray-700 dark:text-gray-300">
+                        <TranslatedText text={event.event} />
+                      </span>
+                      <div className="text-sm text-gray-500 dark:text-gray-400 mt-1.5">
+                        {event.teamName} {event.isHome ? '(Home)' : '(Away)'}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-gray-500 dark:text-gray-400 text-sm">
+                    <TranslatedText text="No upcoming games scheduled." />
+                  </p>
+                )}
               </div>
             </div>
           </aside>

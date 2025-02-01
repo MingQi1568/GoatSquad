@@ -8,7 +8,6 @@ function NewsDigest({ teams, players }) {
   const [digests, setDigests] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [highlights, setHighlights] = useState([]);
 
   // Add debug logging
   useEffect(() => {
@@ -70,100 +69,6 @@ function NewsDigest({ teams, players }) {
     };
 
     fetchDigests();
-  }, [teams, players]);
-
-  // Updated highlights fetch
-  useEffect(() => {
-    const fetchHighlights = async () => {
-      if (!teams?.length && !players?.length) return;
-      
-      try {
-        // Fetch highlights for teams
-        const teamHighlights = await Promise.all(
-          teams.slice(0, 3).map(async team => {
-            try {
-              const response = await axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/mlb/highlights`, {
-                params: { team_id: team.id }
-              });
-              return {
-                type: 'team',
-                subject: team.name,
-                highlight: response.data.highlights?.[0] || {
-                  title: `Featured ${team.name} Highlight`,
-                  description: `Watch the latest ${team.name} action`,
-                  url: 'https://mlb-cuts-diamond.mlb.com/FORGE/2024/2024-03/28/b0e6e6d3-0b9b0b9b-0b9b0b9b-csvm-diamondx64-asset_1280x720_59_4000K.mp4',
-                  date: new Date().toISOString(),
-                  blurb: `Featured ${team.name} highlight`
-                }
-              };
-            } catch (error) {
-              console.error(`Error fetching highlights for team ${team.name}:`, error);
-              return null;
-            }
-          })
-        );
-
-        // Fetch highlights for players
-        const playerHighlights = await Promise.all(
-          players.slice(0, 3).map(async player => {
-            try {
-              const response = await axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/mlb/highlights`, {
-                params: { player_id: player.id }
-              });
-              return {
-                type: 'player',
-                subject: player.fullName,
-                highlight: response.data.highlights?.[0] || {
-                  title: `Featured ${player.fullName} Highlight`,
-                  description: `Watch the latest ${player.fullName} action`,
-                  url: 'https://mlb-cuts-diamond.mlb.com/FORGE/2024/2024-03/28/b0e6e6d3-0b9b0b9b-0b9b0b9b-csvm-diamondx64-asset_1280x720_59_4000K.mp4',
-                  date: new Date().toISOString(),
-                  blurb: `Featured ${player.fullName} highlight`
-                }
-              };
-            } catch (error) {
-              console.error(`Error fetching highlights for player ${player.fullName}:`, error);
-              return null;
-            }
-          })
-        );
-
-        // Filter out null values and combine highlights
-        const validHighlights = [...teamHighlights, ...playerHighlights].filter(Boolean);
-        setHighlights(validHighlights);
-
-      } catch (err) {
-        console.error('Error fetching highlights:', err);
-        // Set default highlights
-        const defaultHighlights = [
-          ...teams.slice(0, 3).map(team => ({
-            type: 'team',
-            subject: team.name,
-            highlight: {
-              title: `Featured ${team.name} Highlight`,
-              description: `Watch the latest ${team.name} action`,
-              url: 'https://mlb-cuts-diamond.mlb.com/FORGE/2024/2024-03/28/b0e6e6d3-0b9b0b9b-0b9b0b9b-csvm-diamondx64-asset_1280x720_59_4000K.mp4',
-              date: new Date().toISOString(),
-              blurb: `Featured ${team.name} highlight`
-            }
-          })),
-          ...players.slice(0, 3).map(player => ({
-            type: 'player',
-            subject: player.fullName,
-            highlight: {
-              title: `Featured ${player.fullName} Highlight`,
-              description: `Watch the latest ${player.fullName} action`,
-              url: 'https://mlb-cuts-diamond.mlb.com/FORGE/2024/2024-03/28/b0e6e6d3-0b9b0b9b-0b9b0b9b-csvm-diamondx64-asset_1280x720_59_4000K.mp4',
-              date: new Date().toISOString(),
-              blurb: `Featured ${player.fullName} highlight`
-            }
-          }))
-        ];
-        setHighlights(defaultHighlights);
-      }
-    };
-
-    fetchHighlights();
   }, [teams, players]);
 
   const parseSourceLinks = (sourcesHtml) => {
@@ -236,7 +141,7 @@ function NewsDigest({ teams, players }) {
     );
   }
 
-  if (error && !digests.length && !highlights.length) {
+  if (error && !digests.length) {
     return (
       <div className="p-6 bg-white dark:bg-gray-800 rounded-lg shadow">
         <div className="text-red-600 dark:text-red-400">
@@ -353,53 +258,6 @@ function NewsDigest({ teams, players }) {
           )}
         </div>
       ))}
-
-      {/* Highlights Section */}
-      {highlights.length > 0 && (
-        <div className="space-y-6">
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
-            <TranslatedText text="Recent Highlights" />
-          </h2>
-          {highlights.map((item, index) => (
-            <div key={index} className="p-6 bg-white dark:bg-gray-800 rounded-lg shadow">
-              <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-4">
-                <TranslatedText 
-                  text={`${item.type === 'team' ? 'Team Highlight: ' : 'Player Highlight: '} ${item.subject}`}
-                />
-              </h3>
-              {item.highlight?.url ? (
-                <div className="aspect-w-16 aspect-h-9 bg-gray-100 dark:bg-gray-900 rounded-lg overflow-hidden mb-4">
-                  <video
-                    className="w-full h-full object-contain"
-                    controls
-                    playsInline
-                    preload="metadata"
-                  >
-                    <source src={item.highlight.url} type="video/mp4" />
-                    <TranslatedText text="Your browser does not support the video tag." />
-                  </video>
-                </div>
-              ) : (
-                <div className="aspect-w-16 aspect-h-9 bg-gray-100 dark:bg-gray-900 rounded-lg flex items-center justify-center mb-4">
-                  <p className="text-gray-500 dark:text-gray-400 text-sm">
-                    <TranslatedText text="No highlight available" />
-                  </p>
-                </div>
-              )}
-              {item.highlight?.description && (
-                <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
-                  <TranslatedText text={item.highlight.description} />
-                </p>
-              )}
-              {item.highlight?.date && (
-                <p className="text-xs text-gray-500 dark:text-gray-500">
-                  <TranslatedText text={new Date(item.highlight.date).toLocaleDateString()} />
-                </p>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
