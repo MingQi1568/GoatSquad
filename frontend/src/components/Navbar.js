@@ -43,7 +43,6 @@ function Navbar() {
 
   const navItems = [
     { path: '/', label: 'Home' },
-    { path: '/news', label: 'News' },
     { path: '/calendar', label: 'Calendar' },
     { path: '/preferences', label: 'Preferences' },
     { path: '/recommendations', label: 'Recommendations' },
