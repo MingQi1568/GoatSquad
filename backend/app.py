@@ -15,7 +15,7 @@ from google.cloud.sql.connector import Connector
 import sqlalchemy
 from werkzeug.middleware.proxy_fix import ProxyFix
 from cfknn import recommend_reels, build_and_save_model, run_main
-from db import load_data, add, remove, get_video_url, get_follow_vid, search_feature
+from db import load_data, add, remove, get_video_url, get_follow_vid, search_feature, searchv2
 from sqlalchemy import create_engine
 from sqlalchemy.sql import text
 from gemini import run_gemini_prompt
@@ -235,15 +235,23 @@ def remove_rating():
 def get_search_recommendations():
     try:
         search = request.args.get('search', '').strip().lower()
-
+        amount = request.args.get('amount', 5)
         if search: 
-            data = search_feature("embeddings", search, 5)
+            data = searchv2("embeddings", search, amount)
             ids = [item['id'] for item in data]
+            print("BRUHHHH")
+            print(ids)
             return jsonify({
                 'success': True,
                 'recommendations': ids,
-                'has_more': False  
+                'has_more': len(ids) == amount  
             })
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Search query is required.'
+            }), 400
+
     except Exception as e:
         logger.error(f"Error getting model recommendations: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -273,8 +281,6 @@ def get_vector_recommendations(current_user):
         if query: 
             data = search_feature("embeddings", query, start)
             ids = [item['id'] for item in data]
-            print("diddy")
-            print(ids)
             return jsonify({
                 'success': True,
                 'recommendations': ids,
