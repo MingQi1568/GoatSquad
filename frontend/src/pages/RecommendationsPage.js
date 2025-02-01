@@ -203,41 +203,56 @@ function RecommendationsPage() {
 
   // Combine the two sets of recs in an interleaved manner
   const combinedRecommendations = useMemo(() => {
-    if (!isModelLoaded) return followRecommendations;
-    return [...followRecommendations, ...modelRecommendations];
-  }, [followRecommendations, modelRecommendations, isModelLoaded]);
+    const combined = [];
+    const maxLength = Math.max(followRecommendations.length, modelRecommendations.length);
+    
+    for (let i = 0; i < maxLength; i++) {
+      if (i < followRecommendations.length) {
+        combined.push(followRecommendations[i]);
+      }
+      if (i < modelRecommendations.length) {
+        combined.push(modelRecommendations[i]);
+      }
+    }
+    
+    return combined;
+  }, [followRecommendations, modelRecommendations]);
 
   // Infinity scroll logic
   const sentinelRef = useRef(null);
 
   useEffect(() => {
     const observer = new IntersectionObserver(
-      ([entry]) => {
+      async ([entry]) => {
         if (entry.isIntersecting && !isLoadingMore && hasMore) {
-          // load next page
           const nextPage = currentPage + 1;
           setCurrentPage(nextPage);
 
-          // alternate calls
+          // Alternate between follow and model recommendations
           const isEven = nextPage % 2 === 0;
-          if (isEven) {
-            fetchFollowRecommendations(Math.ceil(nextPage / 2), searchTerm);
-          } else {
-            fetchModelRecommendations(Math.ceil(nextPage / 2), searchTerm);
+          const pageForRequest = Math.ceil(nextPage / 2);
+
+          setIsLoadingMore(true);
+          try {
+            if (isEven) {
+              await fetchFollowRecommendations(pageForRequest, searchTerm);
+            } else {
+              await fetchModelRecommendations(pageForRequest, searchTerm);
+            }
+          } finally {
+            setIsLoadingMore(false);
           }
         }
       },
-      { rootMargin: "200px" }
+      { threshold: 0.1 }
     );
+
     if (sentinelRef.current) {
       observer.observe(sentinelRef.current);
     }
-    return () => {
-      if (sentinelRef.current) {
-        observer.unobserve(sentinelRef.current);
-      }
-    };
-  }, [currentPage, hasMore, isLoadingMore, searchTerm]);
+
+    return () => observer.disconnect();
+  }, [currentPage, isLoadingMore, hasMore, searchTerm]);
 
   // Check if we have more data to load:
   useEffect(() => {
