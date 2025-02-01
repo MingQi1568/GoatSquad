@@ -310,6 +310,8 @@ def get_model_recommendations():
         try:
             # Try to get personalized recommendations first
             recs, has_more = run_main(table, user_id=user_id, num_recommendations=per_page, offset=offset)
+            if not recs:
+                raise Exception("No personalized recommendations available")
         except Exception as e:
             logger.warning(f"Could not get personalized recommendations for user {user_id}: {str(e)}")
             # If personalized recommendations fail, fall back to default recommendations
@@ -319,8 +321,10 @@ def get_model_recommendations():
                 base_query = """
                     SELECT id as reel_id, COUNT(*) as view_count
                     FROM mlb_highlights
+                    WHERE id IS NOT NULL
                     GROUP BY id
-                    ORDER BY view_count DESC, RANDOM()
+                    HAVING COUNT(*) > 0
+                    ORDER BY RANDOM()
                     OFFSET :offset
                     LIMIT :limit
                 """
@@ -329,9 +333,11 @@ def get_model_recommendations():
                     base_query = """
                         SELECT id as reel_id, COUNT(*) as view_count
                         FROM mlb_highlights
-                        WHERE LOWER(title) LIKE :search OR LOWER(blurb) LIKE :search
+                        WHERE id IS NOT NULL
+                        AND (LOWER(title) LIKE :search OR LOWER(blurb) LIKE :search)
                         GROUP BY id
-                        ORDER BY view_count DESC, RANDOM()
+                        HAVING COUNT(*) > 0
+                        ORDER BY RANDOM()
                         OFFSET :offset
                         LIMIT :limit
                     """
@@ -405,18 +411,60 @@ def get_follow_recommendations(current_user):
         followed_teams = [team.get('name', '') for team in (current_user.followed_teams or [])]
         followed_players = [player.get('fullName', '') for player in (current_user.followed_players or [])]
 
-        if not followed_teams and not followed_players:
-            return jsonify({'success': False, 'message': 'No teams or players followed'}), 400
-
         offset = (page - 1) * per_page
 
+        # If user has no follows, return random popular videos
+        if not followed_teams and not followed_players:
+            engine = create_engine(init_connection_pool())
+            with engine.connect() as conn:
+                base_query = """
+                    SELECT id as reel_id, COUNT(*) as view_count
+                    FROM mlb_highlights
+                    WHERE id IS NOT NULL
+                    GROUP BY id
+                    HAVING COUNT(*) > 0
+                    ORDER BY RANDOM()
+                    OFFSET :offset
+                    LIMIT :limit
+                """
+                
+                if search:
+                    base_query = """
+                        SELECT id as reel_id, COUNT(*) as view_count
+                        FROM mlb_highlights
+                        WHERE id IS NOT NULL
+                        AND (LOWER(title) LIKE :search OR LOWER(blurb) LIKE :search)
+                        GROUP BY id
+                        HAVING COUNT(*) > 0
+                        ORDER BY RANDOM()
+                        OFFSET :offset
+                        LIMIT :limit
+                    """
+                    results = conn.execute(text(base_query), {
+                        "search": f"%{search}%",
+                        "offset": offset,
+                        "limit": per_page + 1
+                    }).fetchall()
+                else:
+                    results = conn.execute(text(base_query), {
+                        "offset": offset,
+                        "limit": per_page + 1
+                    }).fetchall()
+
+                has_more = len(results) > per_page
+                recommendations = [{"reel_id": str(row[0])} for row in results[:per_page]]
+                return jsonify({
+                    'success': True,
+                    'recommendations': recommendations,
+                    'has_more': has_more
+                })
+
         # Build a dynamic WHERE clause to optionally filter by search
-        # Adjust columns to suit your actual DB schema (title, blurb, player, etc.)
-        # Example: Searching in 'player', 'title', or 'blurb' columns
         base_query = f"""
             SELECT id as reel_id 
             FROM {table}
-            WHERE (
+            WHERE id IS NOT NULL
+            AND (
                 player = ANY(:players) 
                 OR home_team = ANY(:teams) 
                 OR away_team = ANY(:teams)
@@ -424,11 +472,12 @@ def get_follow_recommendations(current_user):
         """
         # If we have a search term, add a filter
         if search:
-            # Searching in "player", "title", or "blurb" columns
-            base_query += " AND (LOWER(player) LIKE :search OR LOWER(title) LIKE :search OR LOWER(blurb) LIKE :search)"
+            base_query += " AND (LOWER(title) LIKE :search OR LOWER(blurb) LIKE :search)"
 
         # Final ordering & pagination
         base_query += """
+            GROUP BY id
+            HAVING COUNT(*) > 0
             ORDER BY RANDOM()
             OFFSET :offset
             LIMIT :limit
@@ -453,7 +502,7 @@ def get_follow_recommendations(current_user):
                 # Check if we got more than per_page
                 has_more = len(results) > per_page
                 # Slice off the extra
-                recommendations = [{"reel_id": row[0]} for row in results[:per_page]]
+                recommendations = [{"reel_id": str(row[0])} for row in results[:per_page]]
                 return jsonify({
                     'success': True,
                     'recommendations': recommendations,
