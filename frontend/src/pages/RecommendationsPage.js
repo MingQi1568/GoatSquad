@@ -5,15 +5,18 @@ import PageTransition from "../components/PageTransition";
 import { useAuth } from "../contexts/AuthContext";
 import TranslatedText from "../components/TranslatedText";
 import { userService } from "../services/userService";
+import { videoService } from "../services/videoService";
 import { toast } from "react-hot-toast";
+import { usePreferences } from "../hooks/usePreferences";
 
 function RecommendationsPage() {
   // Replace the dummy data with user data from AuthContext
   const { user } = useAuth();
+  const { preferences, isLoading: preferencesLoading } = usePreferences();
 
-  // Get followed teams and players from user data
-  const followedTeams = user?.preferences?.teams || [];
-  const followedPlayers = user?.preferences?.players || [];
+  // Get followed teams and players from preferences
+  const followedTeams = preferences?.teams || [];
+  const followedPlayers = preferences?.players || [];
 
   // For upcoming events in the right sidebar
   const upcomingEvents = [
@@ -284,6 +287,181 @@ function RecommendationsPage() {
     }
   };
 
+  const [votes, setVotes] = useState({});  // Track votes for each video
+  const [userVotes, setUserVotes] = useState({}); // Track user's votes
+
+  // Handle voting
+  const handleVote = async (videoId, voteType) => {
+    try {
+      // If user is trying to vote the same way again, remove their vote
+      if (userVotes[videoId] === voteType) {
+        await videoService.vote(videoId, 'none');
+        setUserVotes(prev => {
+          const newVotes = { ...prev };
+          delete newVotes[videoId];
+          return newVotes;
+        });
+        setVotes(prev => ({
+          ...prev,
+          [videoId]: {
+            ...prev[videoId],
+            score: prev[videoId].score + (voteType === 'up' ? -1 : 1)
+          }
+        }));
+      } else {
+        // Calculate score change
+        let scoreChange = voteType === 'up' ? 1 : -1;
+        if (userVotes[videoId]) {
+          // If changing vote, double the effect
+          scoreChange *= 2;
+        }
+
+        await videoService.vote(videoId, voteType);
+        setUserVotes(prev => ({
+          ...prev,
+          [videoId]: voteType
+        }));
+        setVotes(prev => ({
+          ...prev,
+          [videoId]: {
+            ...prev[videoId],
+            score: (prev[videoId]?.score || 0) + scoreChange
+          }
+        }));
+      }
+    } catch (error) {
+      toast.error('Failed to vote. Please try again.');
+    }
+  };
+
+  // Load votes for videos
+  const loadVotes = async (videoIds) => {
+    try {
+      const votePromises = videoIds.map(id => videoService.getVotes(id));
+      const voteResults = await Promise.all(votePromises);
+      const newVotes = {};
+      const newUserVotes = {};
+      
+      voteResults.forEach((result, index) => {
+        if (result.success) {
+          const videoId = videoIds[index];
+          newVotes[videoId] = {
+            score: result.score,
+            total: result.total
+          };
+          if (result.userVote) {
+            newUserVotes[videoId] = result.userVote;
+          }
+        }
+      });
+
+      setVotes(prev => ({ ...prev, ...newVotes }));
+      setUserVotes(prev => ({ ...prev, ...newUserVotes }));
+    } catch (error) {
+      console.error('Error loading votes:', error);
+    }
+  };
+
+  // Load votes when recommendations change
+  useEffect(() => {
+    if (combinedRecommendations.length > 0) {
+      const videoIds = combinedRecommendations.map(rec => rec.id);
+      loadVotes(videoIds);
+    }
+  }, [combinedRecommendations]);
+
+  const [comments, setComments] = useState({});  // Store comments for each video
+  const [newComments, setNewComments] = useState({}); // Store new comment text for each video
+  const [editingComment, setEditingComment] = useState(null); // Track which comment is being edited
+  const [editText, setEditText] = useState(''); // Store edited comment text
+
+  // Load comments for a video
+  const loadComments = async (videoId) => {
+    try {
+      const response = await videoService.getComments(videoId);
+      if (response.success) {
+        setComments(prev => ({
+          ...prev,
+          [videoId]: response.comments
+        }));
+      }
+    } catch (error) {
+      console.error('Error loading comments:', error);
+      toast.error('Failed to load comments');
+    }
+  };
+
+  // Handle adding a new comment
+  const handleAddComment = async (videoId) => {
+    try {
+      const content = newComments[videoId]?.trim();
+      if (!content) return;
+
+      const response = await videoService.addComment(videoId, content);
+      if (response.success) {
+        setComments(prev => ({
+          ...prev,
+          [videoId]: [response.comment, ...(prev[videoId] || [])]
+        }));
+        setNewComments(prev => ({
+          ...prev,
+          [videoId]: ''
+        }));
+        toast.success('Comment added successfully');
+      }
+    } catch (error) {
+      console.error('Error adding comment:', error);
+      toast.error('Failed to add comment');
+    }
+  };
+
+  // Handle updating a comment
+  const handleUpdateComment = async (commentId, videoId) => {
+    try {
+      const response = await videoService.updateComment(commentId, editText);
+      if (response.success) {
+        setComments(prev => ({
+          ...prev,
+          [videoId]: prev[videoId].map(comment =>
+            comment.id === commentId ? response.comment : comment
+          )
+        }));
+        setEditingComment(null);
+        setEditText('');
+        toast.success('Comment updated successfully');
+      }
+    } catch (error) {
+      console.error('Error updating comment:', error);
+      toast.error('Failed to update comment');
+    }
+  };
+
+  // Handle deleting a comment
+  const handleDeleteComment = async (commentId, videoId) => {
+    try {
+      const response = await videoService.deleteComment(commentId);
+      if (response.success) {
+        setComments(prev => ({
+          ...prev,
+          [videoId]: prev[videoId].filter(comment => comment.id !== commentId)
+        }));
+        toast.success('Comment deleted successfully');
+      }
+    } catch (error) {
+      console.error('Error deleting comment:', error);
+      toast.error('Failed to delete comment');
+    }
+  };
+
+  // Load comments when recommendations change
+  useEffect(() => {
+    if (combinedRecommendations.length > 0) {
+      combinedRecommendations.forEach(rec => {
+        loadComments(rec.id);
+      });
+    }
+  }, [combinedRecommendations]);
+
   return (
     <PageTransition>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 mt-16">
@@ -380,19 +558,52 @@ function RecommendationsPage() {
                   <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
                     {item.title}
                   </h3>
-                  {item.type === "video" && item.videoUrl && (
-                    <button
-                      onClick={() => handleSaveVideo(item)}
-                      disabled={savedVideos.has(item.videoUrl)}
-                      className={`px-3 py-1 rounded-md text-sm font-medium transition-colors
-                        ${savedVideos.has(item.videoUrl)
-                          ? 'bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed'
-                          : 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800'
+                  <div className="flex items-center space-x-4">
+                    {/* Voting buttons */}
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => handleVote(item.id, 'up')}
+                        className={`p-1 rounded-md transition-colors ${
+                          userVotes[item.id] === 'up'
+                            ? 'bg-green-100 dark:bg-green-900 text-green-600 dark:text-green-400'
+                            : 'hover:bg-gray-100 dark:hover:bg-gray-700'
                         }`}
-                    >
-                      {savedVideos.has(item.videoUrl) ? 'Saved' : 'Save Video'}
-                    </button>
-                  )}
+                      >
+                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                        </svg>
+                      </button>
+                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {votes[item.id]?.score || 0}
+                      </span>
+                      <button
+                        onClick={() => handleVote(item.id, 'down')}
+                        className={`p-1 rounded-md transition-colors ${
+                          userVotes[item.id] === 'down'
+                            ? 'bg-red-100 dark:bg-red-900 text-red-600 dark:text-red-400'
+                            : 'hover:bg-gray-100 dark:hover:bg-gray-700'
+                        }`}
+                      >
+                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                    </div>
+                    {/* Save video button */}
+                    {item.type === "video" && item.videoUrl && (
+                      <button
+                        onClick={() => handleSaveVideo(item)}
+                        disabled={savedVideos.has(item.videoUrl)}
+                        className={`px-3 py-1 rounded-md text-sm font-medium transition-colors
+                          ${savedVideos.has(item.videoUrl)
+                            ? 'bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed'
+                            : 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800'
+                          }`}
+                      >
+                        {savedVideos.has(item.videoUrl) ? 'Saved' : 'Save Video'}
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <p className="mt-2 text-gray-700 dark:text-gray-300">{item.description}</p>
@@ -410,6 +621,115 @@ function RecommendationsPage() {
                     </video>
                   </div>
                 )}
+
+                {/* Comments section */}
+                <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4">
+                  <h4 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">
+                    Comments ({comments[item.id]?.length || 0})
+                  </h4>
+
+                  {/* Add comment form */}
+                  <div className="flex items-start space-x-2 mb-6">
+                    <textarea
+                      value={newComments[item.id] || ''}
+                      onChange={(e) => setNewComments(prev => ({
+                        ...prev,
+                        [item.id]: e.target.value
+                      }))}
+                      placeholder="Add a comment..."
+                      className="flex-1 min-h-[80px] p-2 border border-gray-300 dark:border-gray-600 rounded-lg
+                               bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
+                               focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                    <button
+                      onClick={() => handleAddComment(item.id)}
+                      disabled={!newComments[item.id]?.trim()}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700
+                               disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      Post
+                    </button>
+                  </div>
+
+                  {/* Comments list */}
+                  <div className="space-y-4">
+                    {comments[item.id]?.map(comment => (
+                      <div key={comment.id} className="flex space-x-3">
+                        <img
+                          src={comment.user.avatarUrl || '/images/default-avatar.jpg'}
+                          alt={comment.user.username}
+                          className="w-10 h-10 rounded-full"
+                        />
+                        <div className="flex-1">
+                          <div className="bg-gray-100 dark:bg-gray-700 rounded-lg p-3">
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <span className="font-medium text-gray-900 dark:text-gray-100">
+                                  {comment.user.username}
+                                </span>
+                                <span className="ml-2 text-sm text-gray-500">
+                                  {new Date(comment.created_at).toLocaleDateString()}
+                                </span>
+                              </div>
+                              {comment.user_id === user?.id && (
+                                <div className="flex items-center space-x-2">
+                                  <button
+                                    onClick={() => {
+                                      setEditingComment(comment.id);
+                                      setEditText(comment.content);
+                                    }}
+                                    className="text-blue-600 dark:text-blue-400 hover:text-blue-700"
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteComment(comment.id, item.id)}
+                                    className="text-red-600 dark:text-red-400 hover:text-red-700"
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                            {editingComment === comment.id ? (
+                              <div className="mt-2">
+                                <textarea
+                                  value={editText}
+                                  onChange={(e) => setEditText(e.target.value)}
+                                  className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-lg
+                                           bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                                />
+                                <div className="mt-2 flex justify-end space-x-2">
+                                  <button
+                                    onClick={() => {
+                                      setEditingComment(null);
+                                      setEditText('');
+                                    }}
+                                    className="px-3 py-1 text-gray-600 dark:text-gray-400
+                                             hover:text-gray-700 dark:hover:text-gray-300"
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    onClick={() => handleUpdateComment(comment.id, item.id)}
+                                    className="px-3 py-1 bg-blue-600 text-white rounded-lg
+                                             hover:bg-blue-700 transition-colors"
+                                  >
+                                    Save
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="mt-1 text-gray-800 dark:text-gray-200">
+                                {comment.content}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             ))}
 
