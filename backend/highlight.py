@@ -16,20 +16,55 @@ vertexai.init(project=691596640324, location="us-central1")
 
 model = GenerativeModel("gemini-2.0-flash-exp")
 
-def generate_videos(video_urls, user_id, audio_url=None):
+def generate_videos(video_urls, user_id, audio_url=None, quality='standard', original_volume=0.7, music_volume=0.3):
     """
     Generates a compilation video with audio from GCS
     
-    video_urls: List of video URLs to compile
-    user_id: User ID for the output filename
-    audio_url: GCS URL for the background audio track (e.g. gs://bucket/path/to/audio.mp3)
+    Args:
+        video_urls: List of video URLs to compile
+        user_id: User ID for the output filename
+        audio_url: GCS URL for the background audio track (e.g. gs://bucket/path/to/audio.mp3)
+        quality: Video quality setting ('fast', 'standard', or 'high')
+        original_volume: Volume level for original video audio (0.0 to 1.0)
+        music_volume: Volume level for background music (0.0 to 1.0)
     """
     if not video_urls:
         raise ValueError("No video URLs provided")
 
     print(f"Processing {len(video_urls)} videos for user {user_id}")
+    print(f"Using background audio: {audio_url}")
+    print(f"Quality setting: {quality}")
+    print(f"Volume levels - Original: {original_volume}, Music: {music_volume}")
     
-    #process videos in parallel
+    # Quality settings mapping
+    quality_settings = {
+        'fast': {
+            'preset': 'ultrafast',
+            'crf': 28,
+            'video_bitrate': '2500k',
+            'audio_bitrate': '128k',
+            'resolution': (480, None)  # 480p
+        },
+        'standard': {
+            'preset': 'medium',
+            'crf': 23,
+            'video_bitrate': '5000k',
+            'audio_bitrate': '192k',
+            'resolution': (720, None)  # 720p
+        },
+        'high': {
+            'preset': 'slow',
+            'crf': 18,
+            'video_bitrate': '8000k',
+            'audio_bitrate': '320k',
+            'resolution': (1080, None)  # 1080p
+        }
+    }
+    
+    # Get quality settings
+    settings = quality_settings.get(quality, quality_settings['standard'])
+    
+    # Process videos in parallel
     from concurrent.futures import ThreadPoolExecutor
     from functools import partial
     
@@ -44,12 +79,18 @@ def generate_videos(video_urls, user_id, audio_url=None):
             start_time = float(clipTime[0])
             end_time = float(clipTime[1])
             
-            clip = load_remote_video_with_audio(video, start_time, end_time)
+            # Load video without audio if original volume is 0
+            if original_volume == 0:
+                clip = load_remote_video_without_audio(video, start_time, end_time, settings)
+            else:
+                clip = load_remote_video_with_audio(video, start_time, end_time, settings)
+                clip = clip.volumex(original_volume)
+            
             return clip
             
         except Exception as e:
             print(f"Error processing video {index + 1}: {str(e)}")
-            return load_remote_video_with_audio(video, 0.0, 3.0)
+            return load_remote_video_without_audio(video, 0.0, 3.0, settings)
     
     #process videos in parallel using ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=min(4, len(video_urls))) as executor:
@@ -59,8 +100,9 @@ def generate_videos(video_urls, user_id, audio_url=None):
     final_video = mp.concatenate_videoclips(clips, method="compose")
     
     try:
-        if audio_url:
-            print("Applying background audio...")
+        if audio_url and music_volume > 0:
+            print(f"Applying background audio from {audio_url}...")
+            # Parse bucket and blob path from GCS URL
             bucket_name = audio_url.split('/')[2]
             blob_path = '/'.join(audio_url.split('/')[3:])
             
@@ -73,28 +115,39 @@ def generate_videos(video_urls, user_id, audio_url=None):
                 print("Background audio downloaded successfully")
                 
                 background_audio = mp.AudioFileClip(temp_audio.name)
-                background_audio = background_audio.set_duration(final_video.duration)
                 
-                background_audio = background_audio.volumex(0.3)  # Reduce background music volume
+                # If audio is shorter than video, loop it
+                if background_audio.duration < final_video.duration:
+                    num_loops = int(final_video.duration / background_audio.duration) + 1
+                    background_audio = mp.concatenate_audioclips([background_audio] * num_loops)
+                
+                # Trim audio to match video duration exactly
+                background_audio = background_audio.subclip(0, final_video.duration)
+                background_audio = background_audio.volumex(music_volume)
+                
                 final_video = final_video.set_audio(background_audio)
                 
                 os.unlink(temp_audio.name)
                 print("Background audio applied successfully")
     except Exception as e:
         print(f"Error applying background audio: {str(e)}")
+        if original_volume == 0:
+            final_video = final_video.without_audio()
 
     print("Uploading final video...")
     output_path = f"completeHighlights/{user_id}_{int(datetime.datetime.now().timestamp())}.mp4"
     
+    # Export with quality settings
     with NamedTemporaryFile(suffix='.mp4', delete=False) as temp_output:
         final_video.write_videofile(
             temp_output.name,
             codec='libx264',
             audio_codec='aac',
-            preset='ultrafast',
+            preset=settings['preset'],
             threads=0,
             fps=30,
-            bitrate='5000k'
+            bitrate=settings['video_bitrate'],
+            audio_bitrate=settings['audio_bitrate']
         )
         
         storage_client = storage.Client()
@@ -180,34 +233,35 @@ def get_engaging_moments(video_uri):
         print(f"Error in get_engaging_moments: {str(e)}")
         return "0.0,10.0"  
 
-def load_remote_video_with_audio(url, start_time, end_time):
-    """Loads a remote MP4 file with both video and audio"""
+def load_remote_video_with_audio(url, start_time, end_time, settings):
+    """Loads a remote MP4 file with both video and audio using quality settings"""
     print(f"Loading video from {url} (time: {start_time} to {end_time})")
     
     temp_video = NamedTemporaryFile(delete=False, suffix=".mp4")
 
     try:
+        # Download and trim video with sound using ffmpeg with quality settings
         (
             ffmpeg
             .input(url, ss=start_time, to=end_time)
             .output(temp_video.name, 
                 vcodec="libx264", 
                 acodec="aac",
-                preset="ultrafast",  
-                crf=28,  
-                audio_bitrate="128k",  
-                threads=0  
+                preset=settings['preset'],
+                crf=settings['crf'],
+                audio_bitrate=settings['audio_bitrate'],
+                threads=0  # Use all available CPU threads
             )
             .overwrite_output()
             .run(capture_stdout=True, capture_stderr=True)
         )
 
-
+        # Load the video in moviepy with quality settings
         video_clip = mp.VideoFileClip(
             temp_video.name,
-            audio=True,  
-            target_resolution=(720, None),  
-            fps_source="tbr" 
+            audio=True,  # Load audio directly with video
+            target_resolution=settings['resolution'],  # Apply resolution setting
+            fps_source="tbr"  # Use target bitrate as FPS source
         )
 
         return video_clip
@@ -219,6 +273,87 @@ def load_remote_video_with_audio(url, start_time, end_time):
         except Exception as e:
             print(f"Error cleaning up temporary files: {str(e)}")
 
+def load_remote_video_without_audio(url, start_time, end_time, settings):
+    """Loads a remote MP4 file without audio"""
+    print(f"Loading video without audio from {url} (time: {start_time} to {end_time})")
+    
+    # Create temporary file for video
+    temp_video = NamedTemporaryFile(delete=False, suffix=".mp4")
+
+    try:
+        # Download and trim video without sound using ffmpeg
+        (
+            ffmpeg
+            .input(url, ss=start_time, to=end_time)
+            .output(temp_video.name, 
+                vcodec="libx264",
+                an=None,  # Disable audio
+                preset=settings['preset'],
+                crf=settings['crf'],
+                threads=0
+            )
+            .overwrite_output()
+            .run(capture_stdout=True, capture_stderr=True)
+        )
+
+        # Load the video in moviepy without audio
+        video_clip = mp.VideoFileClip(
+            temp_video.name,
+            audio=False,  # Don't load audio
+            target_resolution=settings['resolution'],
+            fps_source="tbr"
+        )
+
+        return video_clip
+    except Exception as e:
+        raise Exception(f"Error processing video: {str(e)}")
+    finally:
+        # Clean up temporary file
+        try:
+            os.unlink(temp_video.name)
+        except Exception as e:
+            print(f"Error cleaning up temporary files: {str(e)}")
+
+def load_remote_video_without_audio(url, start_time, end_time, settings):
+    """Loads a remote MP4 file without audio"""
+    print(f"Loading video without audio from {url} (time: {start_time} to {end_time})")
+    
+    # Create temporary file for video
+    temp_video = NamedTemporaryFile(delete=False, suffix=".mp4")
+
+    try:
+        # Download and trim video without sound using ffmpeg
+        (
+            ffmpeg
+            .input(url, ss=start_time, to=end_time)
+            .output(temp_video.name, 
+                vcodec="libx264",
+                an=None,  # Disable audio
+                preset=settings['preset'],
+                crf=settings['crf'],
+                threads=0
+            )
+            .overwrite_output()
+            .run(capture_stdout=True, capture_stderr=True)
+        )
+
+        # Load the video in moviepy without audio
+        video_clip = mp.VideoFileClip(
+            temp_video.name,
+            audio=False,  # Don't load audio
+            target_resolution=settings['resolution'],
+            fps_source="tbr"
+        )
+
+        return video_clip
+    except Exception as e:
+        raise Exception(f"Error processing video: {str(e)}")
+    finally:
+        # Clean up temporary file
+        try:
+            os.unlink(temp_video.name)
+        except Exception as e:
+            print(f"Error cleaning up temporary files: {str(e)}")
 
 def download_to_gcs(url, bucket_name, destination_blob_name):
     """

@@ -268,4 +268,56 @@ class CustomMusic(db.Model):
     original_filename = db.Column(db.String(500), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
-    user = db.relationship('User', backref=db.backref('custom_music', lazy=True)) 
+    user = db.relationship('User', backref=db.backref('custom_music', lazy=True))
+
+class VideoVote(db.Model):
+    __tablename__ = 'video_votes'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    video_id = db.Column(db.String(255), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('client_info.client_id'), nullable=False)
+    vote_type = db.Column(db.String(4), nullable=False)  # 'up', 'down', or 'none'
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('video_id', 'user_id', name='unique_video_user_vote'),
+    )
+
+    user = db.relationship('User', backref=db.backref('video_votes', lazy=True))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'video_id': self.video_id,
+            'user_id': self.user_id,
+            'vote_type': self.vote_type,
+            'created_at': self.created_at.isoformat(),
+            'updated_at': self.updated_at.isoformat()
+        }
+
+class VideoComment(db.Model):
+    __tablename__ = 'video_comments'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    video_id = db.Column(db.String(255), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('client_info.client_id'), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = db.relationship('User', backref=db.backref('video_comments', lazy=True))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'video_id': self.video_id,
+            'user_id': self.user_id,
+            'content': self.content,
+            'created_at': self.created_at.isoformat(),
+            'updated_at': self.updated_at.isoformat(),
+            'user': {
+                'username': self.user.username,
+                'avatarUrl': self.user.avatarurl
+            }
+        } 

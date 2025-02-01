@@ -4,10 +4,10 @@ from flask_cors import CORS
 from news_digest import get_news_digest
 import logging
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from google.cloud import translate_v2 as translate
-from auth import AuthService, token_required, db, init_admin, SavedVideo, CustomMusic
+from auth import AuthService, token_required, db, init_admin, SavedVideo, CustomMusic, VideoVote, VideoComment
 import grpc
 from routes.mlb import mlb
 from flask_migrate import Migrate
@@ -283,35 +283,129 @@ def get_model_recommendations():
         page = int(request.args.get('page', default=1))
         per_page = int(request.args.get('per_page', default=5))
         table = request.args.get('table', default='user_ratings_db')
-        search = request.args.get('search', '').strip().lower()
+        search = request.args.get('search', '').strip()
 
+        # Break down search terms for better matching
+        search_terms = [term.lower() for term in search.split() if term]
+        
         offset = (page - 1) * per_page
-        recs, has_more = run_main(table, user_id=user_id, num_recommendations=per_page, offset=offset)
-
-        if search:
-            reel_ids = [r["reel_id"] for r in recs]
-            if not reel_ids:
-                return jsonify({'success': True, 'recommendations': [], 'has_more': False})
-
-            reel_ids_str = ", ".join(str(rid) for rid in reel_ids)
-
+        
+        try:
+            # Try to get personalized recommendations first
+            recs, has_more = run_main(table, user_id=user_id, num_recommendations=per_page, offset=offset)
+            if not recs:
+                raise Exception("No personalized recommendations available")
+        except Exception as e:
+            logger.warning(f"Could not get personalized recommendations for user {user_id}: {str(e)}")
+            # If personalized recommendations fail, fall back to default recommendations
             engine = create_engine(init_connection_pool())
             with engine.connect() as conn:
+                if search_terms:
+                    # Build dynamic search conditions for each term
+                    search_conditions = []
+                    params = {}
+                    for i, term in enumerate(search_terms):
+                        param_name = f"term_{i}"
+                        search_conditions.append(f"""
+                            (LOWER(title) LIKE :term_{i} OR 
+                             LOWER(blurb) LIKE :term_{i} OR 
+                             LOWER(player) LIKE :term_{i} OR
+                             LOWER(home_team) LIKE :term_{i} OR
+                             LOWER(away_team) LIKE :term_{i})
+                        """)
+                        params[f"term_{i}"] = f"%{term}%"
+                    
+                    search_clause = " AND ".join(search_conditions)
+                    
+                    base_query = f"""
+                        WITH matched_videos AS (
+                            SELECT 
+                                id as reel_id,
+                                title,
+                                blurb,
+                                COUNT(*) as view_count,
+                                CASE 
+                                    WHEN LOWER(title) = :exact_search THEN 3
+                                    WHEN LOWER(blurb) = :exact_search THEN 2
+                                    ELSE 0
+                                END as exact_match_score
+                            FROM mlb_highlights
+                            WHERE id IS NOT NULL
+                            AND ({search_clause})
+                            GROUP BY id, title, blurb
+                            HAVING COUNT(*) > 0
+                        )
+                        SELECT 
+                            reel_id,
+                            view_count
+                        FROM matched_videos
+                        ORDER BY exact_match_score DESC, view_count DESC, RANDOM()
+                        OFFSET :offset
+                        LIMIT :limit
+                    """
+                    
+                    # Add the exact search parameter
+                    params['exact_search'] = search.lower()
+                    params['offset'] = offset
+                    params['limit'] = per_page + 1
+                    
+                    results = conn.execute(text(base_query), params).fetchall()
+                else:
+                    base_query = """
+                        SELECT id as reel_id, COUNT(*) as view_count
+                        FROM mlb_highlights
+                        WHERE id IS NOT NULL
+                        GROUP BY id
+                        HAVING COUNT(*) > 0
+                        ORDER BY view_count DESC, RANDOM()
+                        OFFSET :offset
+                        LIMIT :limit
+                    """
+                    results = conn.execute(text(base_query), {
+                        "offset": offset,
+                        "limit": per_page + 1
+                    }).fetchall()
+
+                has_more = len(results) > per_page
+                recs = [{"reel_id": str(row[0])} for row in results[:per_page]]
+
+        if search_terms and recs:
+            reel_ids = [r["reel_id"] for r in recs]
+            reel_ids_str = ", ".join(f"'{rid}'" for rid in reel_ids)
+
+            # Verify the results still match the search criteria
+            engine = create_engine(init_connection_pool())
+            with engine.connect() as conn:
+                search_conditions = []
+                params = {"search": f"%{search.lower()}%"}
+                for i, term in enumerate(search_terms):
+                    param_name = f"term_{i}"
+                    search_conditions.append(f"""
+                        (LOWER(title) LIKE :term_{i} OR 
+                         LOWER(blurb) LIKE :term_{i} OR 
+                         LOWER(player) LIKE :term_{i} OR
+                         LOWER(home_team) LIKE :term_{i} OR
+                         LOWER(away_team) LIKE :term_{i})
+                    """)
+                    params[param_name] = f"%{term}%"
+                
+                search_clause = " AND ".join(search_conditions)
+                
                 highlights_query = text(f"""
                     SELECT id, title
                     FROM mlb_highlights
                     WHERE id IN ({reel_ids_str})
-                      AND (LOWER(title) LIKE :search OR LOWER(blurb) LIKE :search)
+                    AND ({search_clause})
                 """)
-                highlight_results = conn.execute(highlights_query, {"search": f"%{search}%"}).fetchall()
+                highlight_results = conn.execute(highlights_query, params).fetchall()
                 valid_ids = set(row[0] for row in highlight_results)
-            filtered_recs = [r for r in recs if r["reel_id"] in valid_ids]
+                filtered_recs = [r for r in recs if r["reel_id"] in valid_ids]
           
-            return jsonify({
-                'success': True,
-                'recommendations': filtered_recs,
-                'has_more': False  
-            })
+                return jsonify({
+                    'success': True,
+                    'recommendations': filtered_recs,
+                    'has_more': False
+                })
 
         if recs:
             return jsonify({
@@ -329,67 +423,129 @@ def get_model_recommendations():
 @app.route('/recommend/follow', methods=['GET'])
 @token_required
 def get_follow_recommendations(current_user):
-    """
-    Get recommendations based on followed teams and players,
-    optionally filtering with ?search=someTerm
-    """
     try:
         table = request.args.get('table', default='mlb_highlights')
         page = int(request.args.get('page', default=1))
         per_page = int(request.args.get('per_page', default=5))
-        search = request.args.get('search', '').strip().lower()
+        search = request.args.get('search', '').strip()
+        
+        # Break down search terms
+        search_terms = [term.lower() for term in search.split() if term]
 
-        #must have a user
         if not current_user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
 
-        # extract team names and player names from the JSON objects
         followed_teams = [team.get('name', '') for team in (current_user.followed_teams or [])]
         followed_players = [player.get('fullName', '') for player in (current_user.followed_players or [])]
 
-        if not followed_teams and not followed_players:
-            return jsonify({'success': False, 'message': 'No teams or players followed'}), 400
-
         offset = (page - 1) * per_page
 
-        base_query = f"""
-            SELECT id as reel_id 
-            FROM {table}
-            WHERE (
-                player = ANY(:players) 
-                OR home_team = ANY(:teams) 
-                OR away_team = ANY(:teams)
-            )
-        """
-        #if we have a search term, add a filter
-        if search:
-            base_query += " AND (LOWER(player) LIKE :search OR LOWER(title) LIKE :search OR LOWER(blurb) LIKE :search)"
-
-        base_query += """
-            ORDER BY RANDOM()
-            OFFSET :offset
-            LIMIT :limit
-        """
-
-        param_dict = {
-            "players": followed_players,
-            "teams": followed_teams,
-            "offset": offset,
-            "limit": per_page + 1,  
-        }
-        if search:
-            param_dict["search"] = f"%{search}%"
-
-
         engine = create_engine(init_connection_pool())
-        with engine.connect() as connection:
-            results = connection.execute(text(base_query), param_dict).fetchall()
+        with engine.connect() as conn:
+            if not followed_teams and not followed_players:
+                # Build base query for users without follows
+                base_query = """
+                    SELECT id as reel_id, title, blurb, COUNT(*) as view_count
+                    FROM mlb_highlights
+                    WHERE id IS NOT NULL
+                """
+                params = {}
+
+                if search_terms:
+                    search_conditions = []
+                    for i, term in enumerate(search_terms):
+                        search_conditions.append(f"""
+                            (LOWER(title) LIKE :term_{i} OR 
+                             LOWER(blurb) LIKE :term_{i} OR 
+                             LOWER(player) LIKE :term_{i} OR
+                             LOWER(home_team) LIKE :term_{i} OR
+                             LOWER(away_team) LIKE :term_{i})
+                        """)
+                        params[f"term_{i}"] = f"%{term}%"
+                    
+                    base_query += " AND " + " AND ".join(search_conditions)
+
+                base_query += """
+                    GROUP BY id, title, blurb
+                    HAVING COUNT(*) > 0
+                    ORDER BY 
+                        CASE 
+                            WHEN LOWER(title) = :exact_title THEN 3
+                            WHEN LOWER(blurb) = :exact_blurb THEN 2
+                            ELSE 0
+                        END DESC,
+                        view_count DESC,
+                        RANDOM()
+                    OFFSET :offset
+                    LIMIT :limit
+                """
+
+                params.update({
+                    "exact_title": search.lower(),
+                    "exact_blurb": search.lower(),
+                    "offset": offset,
+                    "limit": per_page + 1
+                })
+
+                results = conn.execute(text(base_query), params).fetchall()
+            else:
+                # Build base query for users with follows
+                base_query = """
+                    SELECT id as reel_id, title, blurb, COUNT(*) as view_count
+                    FROM mlb_highlights
+                    WHERE id IS NOT NULL
+                    AND (
+                        player = ANY(:players) 
+                        OR home_team = ANY(:teams) 
+                        OR away_team = ANY(:teams)
+                    )
+                """
+                params = {
+                    "players": followed_players,
+                    "teams": followed_teams
+                }
+
+                if search_terms:
+                    search_conditions = []
+                    for i, term in enumerate(search_terms):
+                        search_conditions.append(f"""
+                            (LOWER(title) LIKE :term_{i} OR 
+                             LOWER(blurb) LIKE :term_{i} OR 
+                             LOWER(player) LIKE :term_{i} OR
+                             LOWER(home_team) LIKE :term_{i} OR
+                             LOWER(away_team) LIKE :term_{i})
+                        """)
+                        params[f"term_{i}"] = f"%{term}%"
+                    
+                    base_query += " AND " + " AND ".join(search_conditions)
+
+                base_query += """
+                    GROUP BY id, title, blurb
+                    HAVING COUNT(*) > 0
+                    ORDER BY 
+                        CASE 
+                            WHEN LOWER(title) = :exact_title THEN 3
+                            WHEN LOWER(blurb) = :exact_blurb THEN 2
+                            ELSE 0
+                        END DESC,
+                        view_count DESC,
+                        RANDOM()
+                    OFFSET :offset
+                    LIMIT :limit
+                """
+
+                params.update({
+                    "exact_title": search.lower(),
+                    "exact_blurb": search.lower(),
+                    "offset": offset,
+                    "limit": per_page + 1
+                })
+
+                results = conn.execute(text(base_query), params).fetchall()
 
             if results:
-                # Check if we got more than per_page
                 has_more = len(results) > per_page
-                # Slice off the extra
-                recommendations = [{"reel_id": row[0]} for row in results[:per_page]]
+                recommendations = [{"reel_id": str(row[0])} for row in results[:per_page]]
                 return jsonify({
                     'success': True,
                     'recommendations': recommendations,
@@ -753,20 +909,44 @@ def compile_showcase(current_user):
                     track_id = int(audio_track.split('_')[1])
                     track = CustomMusic.query.get(track_id)
                     if track and track.user_id == current_user.client_id:
-                        #upload custom track to GCS if it exists locally
-                        local_path = os.path.join(app.config['UPLOAD_FOLDER'], 'custom', track.filename)
-                        if os.path.exists(local_path):
-                            gcs_path = f"highlightMusic/custom/{current_user.client_id}_{track.filename}"
-                            blob = bucket.blob(gcs_path)
-                            blob.upload_from_filename(local_path)
-                            audio_url = f"gs://goatbucket1/{gcs_path}"
-                            logger.info(f"Uploaded custom audio track to GCS: {audio_url}")
+                        # Try different possible filename formats
+                        possible_filenames = [
+                            track.filename,
+                            f"{current_user.client_id}_{track.filename}",
+                            f"1_{current_user.client_id}_{track.filename}",
+                            f"1_{track.filename}"
+                        ]
+                        
+                        # Try different possible paths for each filename
+                        found_blob = None
+                        for filename in possible_filenames:
+                            logger.info(f"Checking filename: {filename}")
+                            possible_paths = [
+                                f"highlightMusic/custom/{filename}",
+                                f"custom/{filename}",
+                                filename
+                            ]
+                            
+                            for path in possible_paths:
+                                logger.info(f"Checking GCS path: {path}")
+                                blob = bucket.blob(path)
+                                if blob.exists():
+                                    logger.info(f"Found audio file in GCS at: {path}")
+                                    found_blob = blob
+                                    break
+                            
+                            if found_blob:
+                                break
+                        
+                        if found_blob:
+                            audio_url = f"gs://goatbucket1/{found_blob.name}"
+                            logger.info(f"Using audio track from GCS: {audio_url}")
                         else:
-                            logger.error(f"Custom audio file not found: {local_path}")
-                    else:
-                        logger.error(f"Custom track not found or unauthorized: {audio_track}")
+                            logger.error(f"Custom audio file not found in GCS for any variation of {track.filename}")
+                            return jsonify({'success': False, 'message': 'Custom audio file not found'}), 404
                 except Exception as e:
                     logger.error(f"Error processing custom track: {str(e)}")
+                    return jsonify({'success': False, 'message': str(e)}), 500
             else:
                 #map track IDs to GCS paths
                 audio_map = {
@@ -777,20 +957,13 @@ def compile_showcase(current_user):
                 }
                 if audio_track in audio_map:
                     gcs_path = audio_map[audio_track]
-                    #check if file exists in GCS
                     blob = bucket.blob(gcs_path)
                     if blob.exists():
                         audio_url = f"gs://goatbucket1/{gcs_path}"
                         logger.info(f"Using GCS audio track: {audio_url}")
                     else:
-                        #if not in GCS, try to upload from local preview
-                        local_preview = os.path.join(app.config['UPLOAD_FOLDER'], 'previews', f"{audio_track}_preview.mp3")
-                        if os.path.exists(local_preview):
-                            blob.upload_from_filename(local_preview)
-                            audio_url = f"gs://goatbucket1/{gcs_path}"
-                            logger.info(f"Uploaded preview track to GCS: {audio_url}")
-                        else:
-                            logger.error(f"Audio file not found in GCS or locally: {gcs_path}")
+                        logger.error(f"Default audio track not found in GCS: {gcs_path}")
+                        return jsonify({'success': False, 'message': 'Selected audio track not found'}), 404
 
         output_uri = generate_videos(video_urls, current_user.client_id, audio_url)
         
@@ -846,7 +1019,7 @@ def handle_saved_videos(current_user):
                         if blob.exists():
                             signed_url = blob.generate_signed_url(
                                 version="v4",
-                                expiration=datetime.timedelta(hours=1),
+                                expiration=timedelta(hours=1),
                                 method="GET"
                             )
                             videos_with_signed_urls.append({
@@ -962,7 +1135,7 @@ def serve_audio_preview(filename):
         
         signed_url = blob.generate_signed_url(
             version="v4",
-            expiration=datetime.timedelta(hours=1),
+            expiration=timedelta(hours=1),
             method="GET"
         )
         
@@ -1040,20 +1213,68 @@ def get_custom_music(current_user):
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/audio/custom/<filename>')
-@token_required
-def serve_custom_audio(current_user, filename):
+def serve_custom_audio(filename):
     """Serve custom audio files"""
     try:
-        # verify the file belongs to the user
-        track = CustomMusic.query.filter_by(
-            user_id=current_user.client_id,
-            filename=filename
-        ).first()
+        logger.info(f"Attempting to serve custom audio: {filename}")
         
-        if not track:
-            return jsonify({'success': False, 'message': 'File not found'}), 404
+        # Initialize GCS client
+        storage_client = storage.Client()
+        bucket = storage_client.bucket('goatbucket1')
+        
+        # Extract user ID from filename (assuming format: {user_id}_{filename})
+        user_id = filename.split('_')[0]
+        
+        # Try different possible paths in GCS
+        possible_paths = [
+            f"highlightMusic/custom/{filename}",
+            f"highlightMusic/custom/{user_id}_{filename}",  # Try with extra user ID prefix
+            f"custom/{filename}",
+            f"custom/{user_id}_{filename}",
+            filename,
+            f"{user_id}_{filename}"
+        ]
+        
+        blob = None
+        for path in possible_paths:
+            logger.info(f"Checking GCS path: {path}")
+            temp_blob = bucket.blob(path)
+            if temp_blob.exists():
+                logger.info(f"Found file in GCS at: {path}")
+                blob = temp_blob
+                break
+        
+        if not blob:
+            # If not in GCS, check local file with both naming patterns
+            local_paths = [
+                os.path.join(app.config['UPLOAD_FOLDER'], 'custom', filename),
+                os.path.join(app.config['UPLOAD_FOLDER'], 'custom', f"{user_id}_{filename}")
+            ]
             
-        return send_from_directory(os.path.join(app.config['UPLOAD_FOLDER'], 'custom'), filename)
+            for local_path in local_paths:
+                logger.info(f"Checking local path: {local_path}")
+                if os.path.exists(local_path):
+                    logger.info(f"Found file locally, uploading to GCS")
+                    # Upload to GCS if found locally
+                    blob = bucket.blob(f"highlightMusic/custom/{filename}")
+                    blob.upload_from_filename(local_path)
+                    break
+            
+            if not blob:
+                logger.error(f"File not found in GCS or locally: {filename}")
+                return jsonify({'success': False, 'message': 'File not found'}), 404
+        
+        # Generate a signed URL valid for 1 hour
+        signed_url = blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(hours=1),
+            method="GET"
+        )
+        logger.info(f"Generated signed URL for {filename}")
+        
+        # Redirect to the signed URL
+        return redirect(signed_url)
+        
     except Exception as e:
         logger.error(f"Error serving custom audio: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': 'Failed to load audio file'}), 500
@@ -1091,6 +1312,165 @@ def download_showcase(current_user, user_id):
         
     except Exception as e:
         logger.error(f"Error downloading showcase: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/videos/<video_id>/vote', methods=['POST'])
+@token_required
+def vote_video(current_user, video_id):
+    """Submit a vote for a video"""
+    try:
+        data = request.get_json()
+        vote_type = data.get('type')
+
+        if vote_type not in ['up', 'down', 'none']:
+            return jsonify({'success': False, 'message': 'Invalid vote type'}), 400
+
+        # Check if user has already voted on this video
+        existing_vote = VideoVote.query.filter_by(
+            video_id=video_id,
+            user_id=current_user.client_id
+        ).first()
+
+        if existing_vote:
+            if vote_type == 'none':
+                # Remove the vote
+                db.session.delete(existing_vote)
+            else:
+                # Update the vote
+                existing_vote.vote_type = vote_type
+                existing_vote.updated_at = datetime.utcnow()
+        elif vote_type != 'none':
+            # Create new vote
+            new_vote = VideoVote(
+                video_id=video_id,
+                user_id=current_user.client_id,
+                vote_type=vote_type
+            )
+            db.session.add(new_vote)
+
+        db.session.commit()
+
+        # Get updated vote counts
+        upvotes = VideoVote.query.filter_by(video_id=video_id, vote_type='up').count()
+        downvotes = VideoVote.query.filter_by(video_id=video_id, vote_type='down').count()
+
+        return jsonify({
+            'success': True,
+            'message': 'Vote recorded successfully',
+            'score': upvotes - downvotes,
+            'total': upvotes + downvotes
+        })
+
+    except Exception as e:
+        logger.error(f"Error recording vote: {str(e)}", exc_info=True)
+        db.session.rollback()
+        return jsonify({'success': False, 'message': 'Failed to record vote'}), 500
+
+@app.route('/api/videos/<video_id>/votes', methods=['GET'])
+@token_required
+def get_video_votes(current_user, video_id):
+    """Get vote counts for a video"""
+    try:
+        # Get vote counts
+        upvotes = VideoVote.query.filter_by(video_id=video_id, vote_type='up').count()
+        downvotes = VideoVote.query.filter_by(video_id=video_id, vote_type='down').count()
+
+        # Get user's vote if any
+        user_vote = VideoVote.query.filter_by(
+            video_id=video_id,
+            user_id=current_user.client_id
+        ).first()
+
+        return jsonify({
+            'success': True,
+            'score': upvotes - downvotes,
+            'total': upvotes + downvotes,
+            'userVote': user_vote.vote_type if user_vote else None
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting votes: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': 'Failed to get votes'}), 500
+
+@app.route('/api/videos/<video_id>/comments', methods=['GET', 'POST'])
+@token_required
+def handle_video_comments(current_user, video_id):
+    """Get or add comments for a video"""
+    if request.method == 'GET':
+        try:
+            comments = VideoComment.query.filter_by(video_id=video_id)\
+                .order_by(VideoComment.created_at.desc())\
+                .all()
+            
+            return jsonify({
+                'success': True,
+                'comments': [comment.to_dict() for comment in comments]
+            })
+        except Exception as e:
+            logger.error(f"Error getting comments: {str(e)}", exc_info=True)
+            return jsonify({'success': False, 'message': 'Failed to get comments'}), 500
+
+    elif request.method == 'POST':
+        try:
+            data = request.get_json()
+            content = data.get('content')
+
+            if not content or not content.strip():
+                return jsonify({'success': False, 'message': 'Comment content is required'}), 400
+
+            new_comment = VideoComment(
+                video_id=video_id,
+                user_id=current_user.client_id,
+                content=content.strip()
+            )
+            db.session.add(new_comment)
+            db.session.commit()
+
+            return jsonify({
+                'success': True,
+                'comment': new_comment.to_dict()
+            })
+        except Exception as e:
+            logger.error(f"Error adding comment: {str(e)}", exc_info=True)
+            db.session.rollback()
+            return jsonify({'success': False, 'message': 'Failed to add comment'}), 500
+
+@app.route('/api/videos/comments/<comment_id>', methods=['PUT', 'DELETE'])
+@token_required
+def handle_single_comment(current_user, comment_id):
+    """Update or delete a specific comment"""
+    try:
+        comment = VideoComment.query.get(comment_id)
+        if not comment:
+            return jsonify({'success': False, 'message': 'Comment not found'}), 404
+
+        if comment.user_id != current_user.client_id:
+            return jsonify({'success': False, 'message': 'Unauthorized'}), 403
+
+        if request.method == 'DELETE':
+            db.session.delete(comment)
+            db.session.commit()
+            return jsonify({'success': True, 'message': 'Comment deleted successfully'})
+
+        elif request.method == 'PUT':
+            data = request.get_json()
+            content = data.get('content')
+
+            if not content or not content.strip():
+                return jsonify({'success': False, 'message': 'Comment content is required'}), 400
+
+            comment.content = content.strip()
+            comment.updated_at = datetime.utcnow()
+            db.session.commit()
+
+            return jsonify({
+                'success': True,
+                'comment': comment.to_dict()
+            })
+
+    except Exception as e:
+        logger.error(f"Error handling comment: {str(e)}", exc_info=True)
+        db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 500
 
 if __name__ == '__main__':

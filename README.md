@@ -39,6 +39,11 @@ A personalized MLB news feed that delivers AI-powered updates about your favorit
    npm install
    ```
 
+5. Install ffmpeg:
+   ```bash
+   brew install ffmpeg
+   ```
+
 ### Running the Application
 
 1. Start the backend:
