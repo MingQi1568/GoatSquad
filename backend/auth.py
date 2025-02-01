@@ -8,13 +8,12 @@ import logging
 from flask_sqlalchemy import SQLAlchemy
 import random
 
-# Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 db = SQLAlchemy()
 
-# At the top after imports
+#after imports
 print("10. Auth.py imported, directory:", os.getcwd())
 
 class SavedVideo(db.Model):
@@ -29,12 +28,12 @@ class SavedVideo(db.Model):
     user = db.relationship('User', backref=db.backref('saved_videos', lazy=True))
 
 class User(db.Model):
-    __tablename__ = 'client_info'  # Your existing table name
+    __tablename__ = 'client_info' 
     
-    client_id = db.Column(db.Integer, primary_key=True)  # Simple primary key
+    client_id = db.Column(db.Integer, primary_key=True)  
     password = db.Column(db.String(256), nullable=False)
-    followed_teams = db.Column(db.JSON, default=list)  # Changed from favorite_team
-    followed_players = db.Column(db.JSON, default=list)  # Changed from favorite_player
+    followed_teams = db.Column(db.JSON, default=list)  
+    followed_players = db.Column(db.JSON, default=list)  
     email = db.Column(db.String(120), unique=True, nullable=False)
     first_name = db.Column(db.String(80), nullable=False)
     last_name = db.Column(db.String(80), nullable=False)
@@ -68,11 +67,10 @@ class User(db.Model):
         """Generate a unique client ID between 1 and 10_000"""
         while True:
             new_id = random.randint(1, 10_000)
-            # Check if this ID already exists
+            #check if this ID already exists
             if not User.query.filter_by(client_id=new_id).first():
                 return new_id
 
-# Get secret key from environment variable or use a default for development
 SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'your-secret-key-here')
 
 
@@ -87,7 +85,7 @@ def token_required(f):
             logger.error("No Authorization header provided")
             return jsonify({'success': False, 'message': 'Token is missing'}), 401
 
-        # Check that it starts with 'Bearer '
+
         parts = auth_header.split()
         if len(parts) != 2 or parts[0].lower() != 'bearer':
             logger.error(f"Invalid Authorization header format: {auth_header}")
@@ -95,12 +93,12 @@ def token_required(f):
 
         token = parts[1]
 
-        # Optional extra check: ensure token has at least 2 dots
+
         if token.count('.') != 2:
             logger.error("JWT token does not contain the required 3 segments")
             return jsonify({'success': False, 'message': 'Invalid token structure'}), 401
 
-        # Now try decoding
+
         try:
             data = jwt.decode(
                 token,
@@ -133,16 +131,16 @@ class AuthService:
         try:
             logger.info("Starting user registration")
             
-            # Check if email already exists
+
             if User.query.filter_by(email=data['email']).first():
                 return {'success': False, 'message': 'Email already registered'}, 409
 
-            # Check if username already exists
+
             if User.query.filter_by(username=data['username']).first():
                 return {'success': False, 'message': 'Username already taken'}, 409
 
             new_user = User(
-                client_id=User.generate_unique_id(),  # Generate unique ID
+                client_id=User.generate_unique_id(), 
                 email=data['email'],
                 password=generate_password_hash(data['password']),
                 first_name=data['firstName'],
@@ -150,8 +148,8 @@ class AuthService:
                 username=data['username'],
                 timezone=data.get('timezone', 'UTC'),
                 avatarurl=data.get('avatarUrl', '/images/default-avatar.jpg'),
-                followed_teams=data.get('teams', []),  # Changed from favorite_team
-                followed_players=data.get('players', [])  # Changed from favorite_player
+                followed_teams=data.get('teams', []), 
+                followed_players=data.get('players', []) 
             )
 
             db.session.add(new_user)
@@ -196,7 +194,7 @@ class AuthService:
                 logger.warning(f"Invalid password for user: {email}")
                 return {'success': False, 'message': 'Invalid email or password'}, 401
 
-            # Token without expiration
+            #token without expiration
             token = jwt.encode({
                 'user_id': user.client_id
             }, SECRET_KEY, algorithm="HS256")
@@ -226,7 +224,7 @@ class AuthService:
             if user is None:
                 return {'success': False, 'message': 'User not found'}, 404
 
-            # Don't allow email or password updates through this endpoint
+            #don't allow email or password updates through this endpoint
             forbidden_updates = ['email', 'password', 'password_hash', 'id']
             update_data = {k: v for k, v in data.items() 
                           if k not in forbidden_updates}
@@ -243,7 +241,7 @@ class AuthService:
             logger.error(f"Error in update_user_profile: {str(e)}", exc_info=True)
             return {'success': False, 'message': str(e)}, 500
 
-# Initialize with a default admin user if no users exist
+#default admin user
 def init_admin():
     try:
         if not User.query.first():

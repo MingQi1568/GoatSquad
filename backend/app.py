@@ -30,19 +30,15 @@ logger = logging.getLogger(__name__)
 
 ORIGINAL_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Create Flask app first
 app = Flask(__name__)
 
-# Then set up configuration
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static/audio')
 ALLOWED_AUDIO_EXTENSIONS = {'mp3', 'wav', 'm4a', 'aac'}
 
-# Create all required directories
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(os.path.join(UPLOAD_FOLDER, 'previews'), exist_ok=True)
 os.makedirs(os.path.join(UPLOAD_FOLDER, 'custom'), exist_ok=True)
 
-# Default preview tracks configuration
 DEFAULT_PREVIEWS = {
     'rock_anthem_preview.mp3': 'Rock Anthem',
     'hiphop_vibes_preview.mp3': 'Hip-Hop Vibes',
@@ -51,13 +47,12 @@ DEFAULT_PREVIEWS = {
 }
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
 def allowed_audio_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_AUDIO_EXTENSIONS
 
 def init_connection_pool():
-    """Initialize database connection"""
     db_user = os.getenv("DB_USER")
     db_pass = os.getenv("DB_PASS")
     db_name = os.getenv("DB_NAME")
@@ -69,29 +64,20 @@ def init_connection_pool():
 def before_request():
     os.chdir(ORIGINAL_DIR)
 
-print("2. Before Flask app creation:", os.getcwd())
-
-# Configure database connection
 app.config['SQLALCHEMY_DATABASE_URI'] = init_connection_pool()
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
-print("11. Before Flask app creation:", os.getcwd())
-current_dir = os.getcwd()
-print("11. Before Flask app creation:", os.getcwd())
-print(current_dir)
 migrate = Migrate(app, db)
 
 with app.app_context():
     try:
         db.create_all()
-        # Initialize admin user
         init_admin()
     except Exception as e:
         logger.error(f"Database initialization error: {str(e)}")
         db.session.rollback()
 
-# Update CORS configuration
 CORS(app, resources={
     r"/*": {
         "origins": ["http://localhost:3000"],
@@ -114,18 +100,13 @@ class NewsDigest(Resource):
     @news_ns.param('teams[]', 'Team names array')
     @news_ns.param('players[]', 'Player names array')
     def get(self):
-        """Get news digest for multiple teams and players"""
         try:
-            # Get arrays from request args
             teams = request.args.getlist('teams[]')
             players = request.args.getlist('players[]')
-            
-            logger.info(f"Received request with teams: {teams}, players: {players}")
             
             if not teams and not players:
                 return {'error': 'At least one team or player must be specified'}, 400
             
-            # Filter out empty strings
             teams = [t for t in teams if t]
             players = [p for p in players if p]
                 
@@ -149,7 +130,7 @@ def get_highlights():
         
         logger.info(f"Fetching highlights for team {team_id} and player {player_id}")
 
-        # First get schedule to find recent games
+        #first get schedule to find recent games
         schedule_url = 'https://statsapi.mlb.com/api/v1/schedule'
         schedule_params = {
             'teamId': team_id,
@@ -167,20 +148,19 @@ def get_highlights():
             for game in date.get('games', []):
                 game_pk = game.get('gamePk')
                 
-                # Get game content
+                #get game content
                 content_url = f'https://statsapi.mlb.com/api/v1/game/{game_pk}/content'
                 content_response = requests.get(content_url)
                 content_response.raise_for_status()
                 content_data = content_response.json()
 
-                # Look for highlights in game content
+                #look for highlights in game content
                 for highlight in content_data.get('highlights', {}).get('highlights', {}).get('items', []):
-                    # Check if highlight involves the player
                     if any(keyword.get('type') == 'player_id' and 
                           keyword.get('value') == str(player_id) 
                           for keyword in highlight.get('keywordsAll', [])):
                         
-                        # Get the best quality playback URL
+                        #get the best quality playback URL
                         playbacks = highlight.get('playbacks', [])
                         if playbacks:
                             best_playback = max(playbacks, key=lambda x: int(x.get('height', 0) or 0))
@@ -293,6 +273,8 @@ def get_vector_recommendations(current_user):
         if query: 
             data = search_feature("embeddings", query, start)
             ids = [item['id'] for item in data]
+            print("diddy")
+            print(ids)
             return jsonify({
                 'success': True,
                 'recommendations': ids,
@@ -619,7 +601,7 @@ def generate_blurb():
             "message": "Internal server error"
         }), 500
 
-# Initialize the translation client
+
 translate_client = translate.Client()
 
 @app.route('/api/translate', methods=['POST'])
@@ -635,7 +617,7 @@ def translate_text():
                 'message': 'No text provided for translation'
             }), 400
 
-        # Perform translation
+
         result = translate_client.translate(
             text,
             target_language=target_language
@@ -729,7 +711,7 @@ def test():
         'timestamp': datetime.utcnow().isoformat()
     })
 
-# Register blueprints
+
 app.register_blueprint(mlb)
 
 @app.route('/api/mlb/schedule', methods=['GET'])
@@ -802,18 +784,18 @@ def get_mlb_teams():
         )
         logger.info(f"MLB API Response Status: {response.status_code}")
         
-        # Add caching headers
+        #add caching headers
         response_data = response.json()
         resp = jsonify({
             'teams': response_data.get('teams', []),
             'copyright': response_data.get('copyright', '')
         })
-        resp.cache_control.max_age = 3600  # Cache for 1 hour
+        resp.cache_control.max_age = 3600  #cache for 1 hour
         return resp
         
     except requests.exceptions.Timeout:
         logger.error("Timeout while fetching MLB teams")
-        # Return cached data if available
+        #return cached data if available
         return jsonify({
             'success': False,
             'message': 'Request to MLB API timed out. Please try again.',
@@ -863,12 +845,10 @@ def test_endpoint():
 @app.route('/api/perform-action', methods=['POST'])
 def perform_action():
     try:
-        # Call the recommendation system with default values
-        user_id = 10  # Default user_id
-        num_recommendations = 5  # Default number of recommendations
-        table = 'user_ratings_db'  # Default table
+        user_id = 10  
+        num_recommendations = 5  
+        table = 'user_ratings_db'  
         
-        # Run the model
         recommendations = run_main(table, user_id=user_id, num_recommendations=num_recommendations, model_path='knn_model.pkl')
         
         return jsonify({
@@ -915,7 +895,6 @@ def get_video_url_endpoint():
 @token_required
 def compile_showcase(current_user):
     try:
-        # Get request data
         data = request.get_json() or {}
         video_urls = data.get('videoUrls', [])
         audio_track = data.get('audioTrack')
@@ -928,11 +907,9 @@ def compile_showcase(current_user):
                 'message': 'No videos provided for compilation'
             }), 400
 
-        # Initialize GCS client
         storage_client = storage.Client()
         bucket = storage_client.bucket('goatbucket1')
 
-        # Get the GCS audio file path
         audio_url = None
         if audio_track:
             if audio_track.startswith('custom_'):
@@ -979,7 +956,7 @@ def compile_showcase(current_user):
                     logger.error(f"Error processing custom track: {str(e)}")
                     return jsonify({'success': False, 'message': str(e)}), 500
             else:
-                # Map track IDs to GCS paths
+                #map track IDs to GCS paths
                 audio_map = {
                     'hiphop_vibes': 'highlightMusic/hiphop_vibes.mp3',
                     'rock_anthem': 'highlightMusic/rock_anthem.mp3',
@@ -996,7 +973,6 @@ def compile_showcase(current_user):
                         logger.error(f"Default audio track not found in GCS: {gcs_path}")
                         return jsonify({'success': False, 'message': 'Selected audio track not found'}), 404
 
-        # Call generate_videos with the URLs, user ID, and audio
         output_uri = generate_videos(video_urls, current_user.client_id, audio_url)
         
         return jsonify({
@@ -1018,32 +994,26 @@ def handle_saved_videos(current_user):
         try:
             saved_videos = SavedVideo.query.filter_by(user_id=current_user.client_id).all()
             
-            # Initialize GCS client
             storage_client = storage.Client()
             bucket = storage_client.bucket('goatbucket1')
             
             videos_with_signed_urls = []
             for video in saved_videos:
                 try:
-                    # Extract blob path from video URL
                     video_url = video.video_url
                     blob_path = None
                     
                     if video_url.startswith('gs://'):
-                        # Handle gs:// URLs
                         parts = video_url.replace('gs://', '').split('/', 1)
                         if len(parts) == 2:
                             blob_path = parts[1]
                     elif 'storage.googleapis.com' in video_url:
-                        # Handle storage.googleapis.com URLs
                         parts = video_url.split('goatbucket1/')
                         if len(parts) == 2:
                             blob_path = parts[1]
                     elif video_url.startswith('completeHighlights/'):
-                        # Handle direct blob paths
                         blob_path = video_url
                     else:
-                        # For MLB video URLs, use them directly
                         videos_with_signed_urls.append({
                             'id': video.id,
                             'videoUrl': video_url,
@@ -1053,7 +1023,6 @@ def handle_saved_videos(current_user):
                         continue
                     
                     if blob_path:
-                        # Generate signed URL for GCS objects
                         blob = bucket.blob(blob_path)
                         if blob.exists():
                             signed_url = blob.generate_signed_url(
@@ -1069,7 +1038,6 @@ def handle_saved_videos(current_user):
                             })
                         else:
                             logger.warning(f"Video file not found in GCS: {blob_path}")
-                            # Still include the video with original URL if blob doesn't exist
                             videos_with_signed_urls.append({
                                 'id': video.id,
                                 'videoUrl': video_url,
@@ -1079,7 +1047,7 @@ def handle_saved_videos(current_user):
                     
                 except Exception as e:
                     logger.error(f"Error processing video {video.id}: {str(e)}")
-                    # Include the video with original URL if processing fails
+                    # include the video with original URL if processing fails
                     videos_with_signed_urls.append({
                         'id': video.id,
                         'videoUrl': video.video_url,
@@ -1104,7 +1072,7 @@ def handle_saved_videos(current_user):
             if not video_url:
                 return jsonify({'success': False, 'message': 'Video URL is required'}), 400
 
-            # Check if video is already saved
+            # check if video is already saved
             existing_video = SavedVideo.query.filter_by(
                 user_id=current_user.client_id,
                 video_url=video_url
@@ -1162,7 +1130,6 @@ def handle_saved_videos(current_user):
 def serve_audio_preview(filename):
     """Serve audio preview files from GCS"""
     try:
-        # Initialize GCS client
         storage_client = storage.Client()
         bucket = storage_client.bucket('goatbucket1')
         blob = bucket.blob(f"highlightMusic/previews/{filename}")
@@ -1174,14 +1141,13 @@ def serve_audio_preview(filename):
                 'message': 'Audio preview file not found.'
             }), 404
         
-        # Generate a signed URL that's valid for 1 hour
         signed_url = blob.generate_signed_url(
             version="v4",
             expiration=timedelta(hours=1),
             method="GET"
         )
         
-        # Redirect to the signed URL
+        # redirect to the signed URL
         return redirect(signed_url)
         
     except Exception as e:
@@ -1203,14 +1169,13 @@ def upload_custom_music(current_user):
         if not allowed_audio_file(file.filename):
             return jsonify({'success': False, 'message': 'Invalid file type. Allowed types: mp3, wav, m4a, aac'}), 400
 
-        # Secure the filename and add user ID to make it unique
+        # secure the filename and add user ID to make it unique
         filename = f"{current_user.client_id}_{secure_filename(file.filename)}"
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], 'custom', filename)
         
-        # Create custom directory if it doesn't exist
+        # create custom directory if it doesn't exist
         os.makedirs(os.path.join(app.config['UPLOAD_FOLDER'], 'custom'), exist_ok=True)
         
-        # Save the file
         file.save(filepath)
         
         # Save to database
@@ -1259,65 +1224,16 @@ def get_custom_music(current_user):
 def serve_custom_audio(filename):
     """Serve custom audio files"""
     try:
-        logger.info(f"Attempting to serve custom audio: {filename}")
+        # Verify the file belongs to the user
+        track = CustomMusic.query.filter_by(
+            user_id=current_user.client_id,
+            filename=filename
+        ).first()
         
-        # Initialize GCS client
-        storage_client = storage.Client()
-        bucket = storage_client.bucket('goatbucket1')
-        
-        # Extract user ID from filename (assuming format: {user_id}_{filename})
-        user_id = filename.split('_')[0]
-        
-        # Try different possible paths in GCS
-        possible_paths = [
-            f"highlightMusic/custom/{filename}",
-            f"highlightMusic/custom/{user_id}_{filename}",  # Try with extra user ID prefix
-            f"custom/{filename}",
-            f"custom/{user_id}_{filename}",
-            filename,
-            f"{user_id}_{filename}"
-        ]
-        
-        blob = None
-        for path in possible_paths:
-            logger.info(f"Checking GCS path: {path}")
-            temp_blob = bucket.blob(path)
-            if temp_blob.exists():
-                logger.info(f"Found file in GCS at: {path}")
-                blob = temp_blob
-                break
-        
-        if not blob:
-            # If not in GCS, check local file with both naming patterns
-            local_paths = [
-                os.path.join(app.config['UPLOAD_FOLDER'], 'custom', filename),
-                os.path.join(app.config['UPLOAD_FOLDER'], 'custom', f"{user_id}_{filename}")
-            ]
+        if not track:
+            return jsonify({'success': False, 'message': 'File not found'}), 404
             
-            for local_path in local_paths:
-                logger.info(f"Checking local path: {local_path}")
-                if os.path.exists(local_path):
-                    logger.info(f"Found file locally, uploading to GCS")
-                    # Upload to GCS if found locally
-                    blob = bucket.blob(f"highlightMusic/custom/{filename}")
-                    blob.upload_from_filename(local_path)
-                    break
-            
-            if not blob:
-                logger.error(f"File not found in GCS or locally: {filename}")
-                return jsonify({'success': False, 'message': 'File not found'}), 404
-        
-        # Generate a signed URL valid for 1 hour
-        signed_url = blob.generate_signed_url(
-            version="v4",
-            expiration=timedelta(hours=1),
-            method="GET"
-        )
-        logger.info(f"Generated signed URL for {filename}")
-        
-        # Redirect to the signed URL
-        return redirect(signed_url)
-        
+        return send_from_directory(os.path.join(app.config['UPLOAD_FOLDER'], 'custom'), filename)
     except Exception as e:
         logger.error(f"Error serving custom audio: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': 'Failed to load audio file'}), 500
@@ -1331,11 +1247,9 @@ def download_showcase(current_user, user_id):
         if str(current_user.client_id) != str(user_id):
             return jsonify({'success': False, 'message': 'Unauthorized'}), 403
             
-        # Initialize GCS client
         storage_client = storage.Client()
         bucket = storage_client.bucket("goatbucket1")
         
-        # List blobs with prefix to find the latest video for this user
         prefix = f"completeHighlights/{user_id}"
         blobs = list(bucket.list_blobs(prefix=prefix))
         
@@ -1343,16 +1257,13 @@ def download_showcase(current_user, user_id):
             logger.error(f"No videos found for user {user_id}")
             return jsonify({'success': False, 'message': 'Video not found'}), 404
             
-        # Get the most recent video (last in list)
         blob = blobs[-1]
         logger.info(f"Found video: {blob.name}")
-            
-        # Get the video content
+
         logger.info("Downloading video content...")
         video_content = blob.download_as_bytes()
         logger.info(f"Downloaded {len(video_content)} bytes")
         
-        # Create response with proper headers
         response = Response(video_content)
         response.headers['Content-Type'] = 'video/mp4'
         response.headers['Content-Disposition'] = f'attachment; filename=highlight-reel-{user_id}.mp4'
