@@ -1216,65 +1216,16 @@ def get_custom_music(current_user):
 def serve_custom_audio(filename):
     """Serve custom audio files"""
     try:
-        logger.info(f"Attempting to serve custom audio: {filename}")
+        # Verify the file belongs to the user
+        track = CustomMusic.query.filter_by(
+            user_id=current_user.client_id,
+            filename=filename
+        ).first()
         
-        # Initialize GCS client
-        storage_client = storage.Client()
-        bucket = storage_client.bucket('goatbucket1')
-        
-        # Extract user ID from filename (assuming format: {user_id}_{filename})
-        user_id = filename.split('_')[0]
-        
-        # Try different possible paths in GCS
-        possible_paths = [
-            f"highlightMusic/custom/{filename}",
-            f"highlightMusic/custom/{user_id}_{filename}",  # Try with extra user ID prefix
-            f"custom/{filename}",
-            f"custom/{user_id}_{filename}",
-            filename,
-            f"{user_id}_{filename}"
-        ]
-        
-        blob = None
-        for path in possible_paths:
-            logger.info(f"Checking GCS path: {path}")
-            temp_blob = bucket.blob(path)
-            if temp_blob.exists():
-                logger.info(f"Found file in GCS at: {path}")
-                blob = temp_blob
-                break
-        
-        if not blob:
-            # If not in GCS, check local file with both naming patterns
-            local_paths = [
-                os.path.join(app.config['UPLOAD_FOLDER'], 'custom', filename),
-                os.path.join(app.config['UPLOAD_FOLDER'], 'custom', f"{user_id}_{filename}")
-            ]
+        if not track:
+            return jsonify({'success': False, 'message': 'File not found'}), 404
             
-            for local_path in local_paths:
-                logger.info(f"Checking local path: {local_path}")
-                if os.path.exists(local_path):
-                    logger.info(f"Found file locally, uploading to GCS")
-                    # Upload to GCS if found locally
-                    blob = bucket.blob(f"highlightMusic/custom/{filename}")
-                    blob.upload_from_filename(local_path)
-                    break
-            
-            if not blob:
-                logger.error(f"File not found in GCS or locally: {filename}")
-                return jsonify({'success': False, 'message': 'File not found'}), 404
-        
-        # Generate a signed URL valid for 1 hour
-        signed_url = blob.generate_signed_url(
-            version="v4",
-            expiration=timedelta(hours=1),
-            method="GET"
-        )
-        logger.info(f"Generated signed URL for {filename}")
-        
-        # Redirect to the signed URL
-        return redirect(signed_url)
-        
+        return send_from_directory(os.path.join(app.config['UPLOAD_FOLDER'], 'custom'), filename)
     except Exception as e:
         logger.error(f"Error serving custom audio: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': 'Failed to load audio file'}), 500
