@@ -30,21 +30,20 @@ def run_gemini_prompt(prompt):
 
 def generate_embeddings(text):
     try:
-        logger.info(f"Generating embeddings for text: {text[:50]}...")
-        embedding_model = 'models/embedding-001'
+        genai.configure(api_key=api_key)
+        
+        logger.debug(f"Generating embeddings for text: {text[:50]}...")
         result = genai.embed_content(
-            model=embedding_model,
-            content=text,
-            task_type="retrieval_document"
+            model="models/text-embedding-004",
+            content=text
         )
         
-        if result and 'embedding' in result:
-            embedded = result['embedding']
-            logger.info(f"Embeddings generated successfully: {embedded}...")
-            return embedded
-        return None
+        embedded_vector = result['embedding']
+        logger.debug(f"Embeddings generated. First few floats: {embedded_vector[:5]}...")
+        return embedded_vector
+    
     except Exception as e:
         logger.error(f"Error generating embeddings: {str(e)}", exc_info=True)
-        return None
+        return []
 
 
