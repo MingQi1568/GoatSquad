@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import TranslatedText from './TranslatedText';
 import LanguageSelector from './LanguageSelector';
 import { useDarkMode } from '../hooks/useDarkMode';
@@ -10,6 +10,7 @@ function Navbar() {
   const { isDarkMode, toggleDarkMode } = useDarkMode();
   const { logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const menuRef = useRef(null);
   const buttonRef = useRef(null);
@@ -31,6 +32,14 @@ function Navbar() {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, []);
+
+  // Helper function to determine if a link is active
+  const isActive = (path) => {
+    if (path === '/') {
+      return location.pathname === '/';
+    }
+    return location.pathname.startsWith(path);
+  };
 
   const navItems = [
     { path: '/', label: 'Home' },
@@ -67,7 +76,11 @@ function Navbar() {
                 <Link
                   key={item.path}
                   to={item.path}
-                  className="inline-flex items-center px-1 pt-1 text-sm font-medium text-gray-900 dark:text-gray-100"
+                  className={`inline-flex items-center px-1 pt-1 text-sm font-medium border-b-2 transition-colors duration-200
+                    ${isActive(item.path) 
+                      ? 'border-blue-500 text-blue-600 dark:text-blue-400 dark:border-blue-400 font-bold' 
+                      : 'border-transparent text-gray-900 dark:text-gray-100 hover:text-blue-600 dark:hover:text-blue-400 hover:border-blue-300'
+                    }`}
                 >
                   <TranslatedText text={item.label} />
                 </Link>
@@ -164,7 +177,11 @@ function Navbar() {
             <Link
               key={item.path}
               to={item.path}
-              className="block pl-3 pr-4 py-2 text-base font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+              className={`block pl-3 pr-4 py-2 text-base font-medium border-l-4 transition-colors duration-200
+                ${isActive(item.path)
+                  ? 'bg-blue-50 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 font-bold border-blue-500 dark:border-blue-400'
+                  : 'border-transparent text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 hover:border-blue-300'
+                }`}
             >
               <TranslatedText text={item.label} />
             </Link>
