@@ -15,7 +15,7 @@ from google.cloud.sql.connector import Connector
 import sqlalchemy
 from werkzeug.middleware.proxy_fix import ProxyFix
 from cfknn import recommend_reels, build_and_save_model, run_main
-from db import load_data, add, remove, get_video_url, get_follow_vid, search_feature, searchv2
+from db import load_data, add, remove, get_video_url, get_follow_vid, search_feature, rag_recommend_pgvector
 from sqlalchemy import create_engine
 from sqlalchemy.sql import text
 from gemini import run_gemini_prompt
@@ -237,7 +237,7 @@ def get_search_recommendations():
         search = request.args.get('search', '').strip().lower()
         amount = request.args.get('amount', 5)
         if search: 
-            data = searchv2("embeddings", search, amount)
+            data = search_feature("embeddings", search, amount)
             ids = [item['id'] for item in data]
             print("BRUHHHH")
             print(ids)
@@ -279,7 +279,7 @@ def get_vector_recommendations(current_user):
         query = f"Teams: {', '.join(followed_teams)}. Players: {', '.join(followed_players)}."
 
         if query: 
-            data = search_feature("embeddings", query, start)
+            data = rag_recommend_pgvector("embeddings", query, start)
             ids = [item['id'] for item in data]
             return jsonify({
                 'success': True,
