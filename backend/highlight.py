@@ -11,6 +11,7 @@ import io
 import os
 import tempfile
 import datetime
+from moviepy.editor import CompositeAudioClip
 
 vertexai.init(project=691596640324, location="us-central1")
 
@@ -85,6 +86,7 @@ def generate_videos(video_urls, user_id, audio_url=None, quality='standard', ori
             else:
                 clip = load_remote_video_with_audio(video, start_time, end_time, settings)
                 clip = clip.volumex(original_volume)
+                print("O: " + str(original_volume))
             
             return clip
             
@@ -124,8 +126,10 @@ def generate_videos(video_urls, user_id, audio_url=None, quality='standard', ori
                 # Trim audio to match video duration exactly
                 background_audio = background_audio.subclip(0, final_video.duration)
                 background_audio = background_audio.volumex(music_volume)
+                print("M: " + str(music_volume))
                 
-                final_video = final_video.set_audio(background_audio)
+                combined_audio = CompositeAudioClip([final_video.audio, background_audio])
+                final_video = final_video.set_audio(combined_audio)
                 
                 os.unlink(temp_audio.name)
                 print("Background audio applied successfully")
