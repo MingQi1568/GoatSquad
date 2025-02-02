@@ -24,6 +24,7 @@ import re
 import random
 from google.cloud import storage
 from werkzeug.utils import secure_filename
+from tempfile import NamedTemporaryFile
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1166,48 +1167,57 @@ def serve_audio_preview(filename):
 @app.route('/api/custom-music', methods=['POST'])
 @token_required
 def upload_custom_music(current_user):
-    """Upload custom background music"""
+    """Upload a custom music track"""
     try:
         if 'music' not in request.files:
             return jsonify({'success': False, 'message': 'No file provided'}), 400
             
         file = request.files['music']
-        if file.filename == '':
+        if not file or not file.filename:
             return jsonify({'success': False, 'message': 'No file selected'}), 400
             
         if not allowed_audio_file(file.filename):
-            return jsonify({'success': False, 'message': 'Invalid file type. Allowed types: mp3, wav, m4a, aac'}), 400
+            return jsonify({'success': False, 'message': 'Invalid file type'}), 400
 
-        # secure the filename and add user ID to make it unique
-        filename = f"{current_user.client_id}_{secure_filename(file.filename)}"
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], 'custom', filename)
+        # Secure the filename and add user_id prefix
+        original_filename = secure_filename(file.filename)
+        filename = f"{current_user.client_id}_{original_filename}"
+        gcs_path = f"highlightMusic/custom/{filename}"
+
+        # Upload to GCS
+        storage_client = storage.Client()
+        bucket = storage_client.bucket('goatbucket1')
+        blob = bucket.blob(gcs_path)
         
-        # create custom directory if it doesn't exist
-        os.makedirs(os.path.join(app.config['UPLOAD_FOLDER'], 'custom'), exist_ok=True)
-        
-        file.save(filepath)
-        
-        # Save to database
+        # Create a temporary file to store the upload
+        with NamedTemporaryFile(delete=False) as temp_file:
+            file.save(temp_file.name)
+            blob.upload_from_filename(temp_file.name)
+            os.unlink(temp_file.name)  # Clean up temp file
+
+        # Save record to database
         new_track = CustomMusic(
             user_id=current_user.client_id,
             filename=filename,
-            original_filename=file.filename
+            original_filename=original_filename
         )
         db.session.add(new_track)
         db.session.commit()
-        
+
         return jsonify({
             'success': True,
+            'message': 'Music uploaded successfully',
             'track': {
                 'id': new_track.id,
                 'filename': filename,
-                'originalName': file.filename
+                'originalName': original_filename,
+                'url': f"/audio/custom/{filename}"
             }
         })
-        
+
     except Exception as e:
-        db.session.rollback()
         logger.error(f"Error uploading custom music: {str(e)}", exc_info=True)
+        db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/custom-music', methods=['GET'])
