@@ -10,6 +10,7 @@ users.db
 *.so
 
 codebase.md
+repomix-output.txt
 
 # Distribution / packaging
 .Python
