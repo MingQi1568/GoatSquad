@@ -141,10 +141,7 @@ def rag_recommend_pgvector(table, query_text, start=0):
         print(f"Error performing RAG with pgvector: {e}")
         return []
     
-def search_feature(table, search, start):
-    return rag_recommend_pgvector(table, search, start)
-
-def searchv2(table, search, amount, start=0):
+def search_feature(table, search, amount, start=0):
     engine = create_engine(DATABASE_URL)
     query_embedding = generate_embeddings(search)
 
