@@ -727,7 +727,31 @@ function ShowcaseCompilation() {
                     </video>
                   </div>
                   
-                  {/* Add download button */}
+                  {/* Add shareable URL section */}
+                  <div className="mt-4 p-4 bg-white dark:bg-gray-700 rounded-lg">
+                    <h3 className="text-sm font-medium mb-2">
+                      <TranslatedText text="Share your highlight reel:" />
+                    </h3>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={outputUri}
+                        readOnly
+                        className="flex-1 p-2 text-sm border rounded bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                      />
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(outputUri);
+                          toast.success('URL copied to clipboard!');
+                        }}
+                        className="px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+                      >
+                        <TranslatedText text="Copy Link" />
+                      </button>
+                    </div>
+                  </div>
+                  
+                  {/* Download button */}
                   <div className="mt-4 flex justify-center">
                     <button
                       onClick={handleDownload}

@@ -268,7 +268,7 @@ class CustomMusic(db.Model):
     original_filename = db.Column(db.String(500), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
-    user = db.relationship('User', backref=db.backref('custom_music', lazy=True))
+    user = db.relationship('User', backref=db.backref('custom_music', lazy=True)) 
 
 class VideoVote(db.Model):
     __tablename__ = 'video_votes'
