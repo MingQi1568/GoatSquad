@@ -20,9 +20,8 @@ def run_gemini_prompt(prompt):
         logger.info(f"Running prompt: {prompt[:50]}...")
         model = genai.GenerativeModel('gemini-pro')
         response = model.generate_content(prompt)
-        
         if response.text:
-            return response.text.strip()
+            return response.text
         return None
     except Exception as e:
         logger.error(f"Error running Gemini prompt: {str(e)}", exc_info=True)
@@ -47,3 +46,4 @@ def generate_embeddings(text):
         return []
 
 
+run_gemini_prompt("calvin")
