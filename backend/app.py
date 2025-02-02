@@ -904,6 +904,9 @@ def compile_showcase(current_user):
         data = request.get_json() or {}
         video_urls = data.get('videoUrls', [])
         audio_track = data.get('audioTrack')
+        quality = data.get('quality')
+        original_volume = data.get('originalVolume')
+        music_volume = data.get('musicVolume')
         
         logger.info(f"Compiling showcase with audio track: {audio_track}")
         
@@ -979,7 +982,7 @@ def compile_showcase(current_user):
                         logger.error(f"Default audio track not found in GCS: {gcs_path}")
                         return jsonify({'success': False, 'message': 'Selected audio track not found'}), 404
 
-        output_uri = generate_videos(video_urls, current_user.client_id, audio_url)
+        output_uri = generate_videos(video_urls, current_user.client_id, audio_url,quality=quality, original_volume=original_volume,music_volume=music_volume)
         
         return jsonify({
             'success': True,
