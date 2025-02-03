@@ -25,6 +25,9 @@ import random
 from google.cloud import storage
 from werkzeug.utils import secure_filename
 from tempfile import NamedTemporaryFile
+from imagen import generate_image
+import uuid
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1136,6 +1139,57 @@ def handle_saved_videos(current_user):
             logger.error(f"Error deleting saved video: {str(e)}", exc_info=True)
             return jsonify({'success': False, 'message': str(e)}), 500
 
+def upload_to_gcs_in_memory(file_obj, bucket_name, destination_blob_name):
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(destination_blob_name)
+    blob.upload_from_file(file_obj, content_type='image/png')
+    blob.make_public()
+    return blob.public_url
+
+@app.route("/api/generate-avatar", methods=["GET"])
+@token_required  
+def generate_avatar(current_user):
+    followed_players = [player.get('fullName', '') for player in (current_user.followed_players or [])]
+    chosen_player = random.choice(followed_players) if followed_players else "Shohei Ohtani"
+    
+    try:
+        prompt = f"Cartoon {chosen_player}, the baseball player"
+        image_path = generate_image(prompt, "sticker.png", "691596640324", "us-central1")
+        
+        user_id = current_user.client_id
+        unique_id = str(uuid.uuid4())
+        blob_name = f"avatars/{user_id}_{unique_id}.png"
+    
+        with open(image_path, "rb") as image_file:
+            public_url = upload_to_gcs_in_memory(image_file, "pfp_bucket", blob_name)
+        
+        # Update the database with the new avatar URL
+        try:
+            current_user.avatarurl = public_url
+            db.session.commit()
+            
+            # Clean up the temporary image file
+            os.remove(image_path)
+            
+            return jsonify({
+                "success": True, 
+                "url": public_url,
+                "message": "Avatar updated successfully"
+            }), 200
+            
+        except Exception as db_error:
+            logger.error(f"Database error: {str(db_error)}")
+            db.session.rollback()
+            return jsonify({
+                "success": False,
+                "error": "Failed to update avatar in database"
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Avatar generation error: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
 @app.route('/audio/previews/<filename>')
 def serve_audio_preview(filename):
     """Serve audio preview files from GCS"""
@@ -1450,6 +1504,22 @@ def handle_single_comment(current_user, comment_id):
         logger.error(f"Error handling comment: {str(e)}", exc_info=True)
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/user/profile', methods=['GET'])
+@token_required
+def get_user_profile(current_user):
+    """Get current user's profile"""
+    try:
+        return jsonify({
+            'success': True,
+            'user': current_user.to_dict()
+        })
+    except Exception as e:
+        logger.error(f"Error fetching user profile: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': 'Failed to fetch user profile'
+        }), 500
 
 if __name__ == '__main__':
     app.run(

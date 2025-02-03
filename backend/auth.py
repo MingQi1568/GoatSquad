@@ -39,7 +39,7 @@ class User(db.Model):
     last_name = db.Column(db.String(80), nullable=False)
     username = db.Column(db.String(80), unique=True, nullable=False)
     timezone = db.Column(db.String(50), default='UTC')
-    avatarurl = db.Column(db.String(200))
+    avatarurl = db.Column(db.String(500))  # Increased length for GCS URLs
 
     def to_dict(self):
         return {
