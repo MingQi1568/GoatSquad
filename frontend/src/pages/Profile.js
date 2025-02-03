@@ -2,9 +2,11 @@ import React, { useState, useEffect } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { userService } from "../services/userService";
 import PageTransition from "../components/PageTransition";
+import { toast } from 'react-hot-toast';
+import axios from "axios";
 
 function Profile() {
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const [formData, setFormData] = useState({
     firstName: "",
     lastName: "",
@@ -18,6 +20,7 @@ function Profile() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [isGeneratingAvatar, setIsGeneratingAvatar] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -87,6 +90,39 @@ function Profile() {
     }
   };
 
+  const handleGenerateAvatar = async () => {
+    try {
+      setIsGeneratingAvatar(true);
+      const response = await axios.get(
+        `${process.env.REACT_APP_BACKEND_URL}/api/generate-avatar`,
+        {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem('auth_token')}`
+          }
+        }
+      );
+      
+      if (response.data.success) {
+        // Update local state
+        setFormData(prev => ({
+          ...prev,
+          avatarUrl: response.data.url
+        }));
+        
+        // Refresh the auth context to update avatar everywhere
+        await refreshUser();
+        toast.success('Avatar generated and updated successfully!');
+      } else {
+        throw new Error(response.data.error || 'Failed to generate avatar');
+      }
+    } catch (err) {
+      console.error('Error generating avatar:', err);
+      toast.error(err.message || 'Failed to generate avatar');
+    } finally {
+      setIsGeneratingAvatar(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex justify-center items-center min-h-screen">
@@ -115,13 +151,34 @@ function Profile() {
                 alt="Profile"
                 className="h-16 w-16 rounded-full object-cover"
               />
-              <button
-                type="button"
-                onClick={() => document.getElementById("avatar-input").click()}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 rounded-md border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600"
-              >
-                Change avatar
-              </button>
+              <div className="flex space-x-2">
+                <button
+                  type="button"
+                  onClick={() => document.getElementById("avatar-input").click()}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 rounded-md border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600"
+                >
+                  Upload Avatar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleGenerateAvatar}
+                  disabled={isGeneratingAvatar}
+                  className={`px-4 py-2 text-sm font-medium text-white rounded-md border 
+                    ${isGeneratingAvatar 
+                      ? 'bg-blue-400 cursor-not-allowed' 
+                      : 'bg-blue-600 hover:bg-blue-700'
+                    } transition-colors duration-200`}
+                >
+                  {isGeneratingAvatar ? (
+                    <div className="flex items-center space-x-2">
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                      <span>Generating...</span>
+                    </div>
+                  ) : (
+                    'Generate AI Avatar'
+                  )}
+                </button>
+              </div>
               <input
                 id="avatar-input"
                 type="file"
@@ -129,10 +186,10 @@ function Profile() {
                 onChange={handleAvatarChange}
                 className="hidden"
               />
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                JPG, GIF or PNG. 1MB max.
-              </p>
             </div>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              Upload a photo or generate an AI avatar based on your favorite players.
+            </p>
 
             <form onSubmit={handleSubmit} className="space-y-6">
               {/* Name Fields */}

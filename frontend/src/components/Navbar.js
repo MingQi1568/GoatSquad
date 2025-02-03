@@ -8,7 +8,7 @@ import axios from 'axios';
 
 function Navbar() {
   const { isDarkMode, toggleDarkMode } = useDarkMode();
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
@@ -124,8 +124,8 @@ function Navbar() {
                 aria-haspopup="true"
               >
                 <img
-                  className="h-8 w-8 rounded-full"
-                  src="/images/default-avatar.jpg"
+                  className="h-8 w-8 rounded-full object-cover"
+                  src={user?.avatarUrl || "/images/default-avatar.jpg"}
                   alt="Profile"
                 />
               </button>

@@ -63,6 +63,19 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
   };
 
+  const refreshUser = async () => {
+    try {
+      const response = await axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/user/profile`);
+      if (response.data.success) {
+        setUser(response.data.user);
+      } else {
+        throw new Error('Failed to refresh user data');
+      }
+    } catch (error) {
+      console.error('Error refreshing user data:', error);
+    }
+  };
+
   // Show loading state while checking authentication
   if (isLoading) {
     return (
@@ -73,7 +86,7 @@ export const AuthProvider = ({ children }) => {
   }
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, login, logout, user }}>
+    <AuthContext.Provider value={{ isAuthenticated, login, logout, user, setUser, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );
