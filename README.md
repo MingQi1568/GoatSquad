@@ -42,33 +42,33 @@ Stay ahead of the game with real-time updates, AI-driven news digests, and immer
 
 ### **Setup Instructions**
 
-#### 1️⃣ Clone the Repository
+#### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/GentleOtaku/GoatSquad
 cd GoatSquad
 ```
 
-#### 2️⃣ Configure Environment Variables
+#### 2. Configure Environment Variables
 
 - Locate **2 `.env` files** in the project directory.
 - Customize the environment variables to suit your development setup.
 
-#### 3️⃣ Install Backend Dependencies
+#### 3. Install Backend Dependencies
 
 ```bash
 cd backend
 pip install -r requirements.txt
 ```
 
-#### 4️⃣ Install Frontend Dependencies
+#### 4. Install Frontend Dependencies
 
 ```bash
 cd frontend
 npm install
 ```
 
-#### 5️⃣ Install `ffmpeg`
+#### 5. Install `ffmpeg`
 
 `ffmpeg` is essential for processing audio and video content.
 
@@ -106,13 +106,13 @@ ffmpeg -version
 
 ## 🚀 **Running the Application**
 
-### 1️⃣ Start the Backend
+### 1. Start the Backend
 ```bash
 cd backend
 python app.py
 ```
 
-### 2️⃣ Start the Frontend
+### 2. Start the Frontend
 ```bash
 cd frontend
 npm run dev
@@ -122,12 +122,12 @@ npm run dev
 
 ## 🐳 **Docker Setup**
 
-### 1️⃣ Build the Docker Image
+### 1. Build the Docker Image
 ```bash
 docker-compose build
 ```
 
-### 2️⃣ Run Docker Containers
+### 2. Run Docker Containers
 ```bash
 docker-compose up
 ```
