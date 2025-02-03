@@ -77,6 +77,10 @@ def generate_videos(video_urls, user_id, audio_url=None, quality='standard', ori
             print(f"Processing video {index + 1}/{len(video_urls)}: {video}")
             
             clipTime = get_engaging_moments(video).split(",")
+            if ':' in clipTime[0]:
+                clipTime[0] = clipTime[0].split(":")[1]
+            if ':' in clipTime[1]:
+                clipTime[1] = clipTime[1].split(":")[1]
             start_time = float(clipTime[0])
             end_time = float(clipTime[1])
             

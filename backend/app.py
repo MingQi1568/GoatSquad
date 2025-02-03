@@ -458,138 +458,59 @@ def get_model_recommendations():
 @app.route('/recommend/follow', methods=['GET'])
 @token_required
 def get_follow_recommendations(current_user):
+    """Get recommendations based on followed teams/players with random ordering"""
     try:
-        table = request.args.get('table', default='mlb_highlights')
-        page = int(request.args.get('page', default=1))
-        per_page = int(request.args.get('per_page', default=5))
-        search = request.args.get('search', '').strip()
+        page = request.args.get('page', 1, type=int)
+        search = request.args.get('search', '').strip().lower()
+        per_page = 5
 
-        # Break down search terms
-        search_terms = [term.lower() for term in search.split() if term]
-
-        if not current_user:
-            return jsonify({'success': False, 'message': 'User not found'}), 404
-
+        # Get followed teams and players names
         followed_teams = [team.get('name', '') for team in (current_user.followed_teams or [])]
         followed_players = [player.get('fullName', '') for player in (current_user.followed_players or [])]
 
-        offset = (page - 1) * per_page
+        if not followed_teams and not followed_players:
+            return jsonify({
+                'success': True,
+                'recommendations': [],
+                'has_more': False
+            })
 
+        # Build query to get random recommendations from mlb_highlights
+        query = text("""
+            SELECT id as reel_id
+            FROM mlb_highlights 
+            WHERE home_team = ANY(:teams)
+               OR away_team = ANY(:teams)
+               OR player = ANY(:players)
+            ORDER BY random()
+            LIMIT :limit OFFSET :offset
+        """)
+
+        # Execute query with parameters
         engine = create_engine(init_connection_pool())
-        with engine.connect() as conn:
-            if not followed_teams and not followed_players:
-                # Build base query for users without follows
-                base_query = """
-                    SELECT id as reel_id, title, blurb, COUNT(*) as view_count
-                    FROM mlb_highlights
-                    WHERE id IS NOT NULL
-                """
-                params = {}
-
-                if search_terms:
-                    search_conditions = []
-                    for i, term in enumerate(search_terms):
-                        search_conditions.append(f"""
-                            (LOWER(title) LIKE :term_{i} OR 
-                             LOWER(blurb) LIKE :term_{i} OR 
-                             LOWER(player) LIKE :term_{i} OR
-                             LOWER(home_team) LIKE :term_{i} OR
-                             LOWER(away_team) LIKE :term_{i})
-                        """)
-                        params[f"term_{i}"] = f"%{term}%"
-
-                    base_query += " AND " + " AND ".join(search_conditions)
-
-                base_query += """
-                    GROUP BY id, title, blurb
-                    HAVING COUNT(*) > 0
-                    ORDER BY 
-                        CASE 
-                            WHEN LOWER(title) = :exact_title THEN 3
-                            WHEN LOWER(blurb) = :exact_blurb THEN 2
-                            ELSE 0
-                        END DESC,
-                        view_count DESC,
-                        RANDOM()
-                    OFFSET :offset
-                    LIMIT :limit
-                """
-
-                params.update({
-                    "exact_title": search.lower(),
-                    "exact_blurb": search.lower(),
-                    "offset": offset,
-                    "limit": per_page + 1
-                })
-
-                results = conn.execute(text(base_query), params).fetchall()
-            else:
-                # Build base query for users with follows
-                base_query = """
-                    SELECT id as reel_id, title, blurb, COUNT(*) as view_count
-                    FROM mlb_highlights
-                    WHERE id IS NOT NULL
-                    AND (
-                        player = ANY(:players) 
-                        OR home_team = ANY(:teams) 
-                        OR away_team = ANY(:teams)
-                    )
-                """
-                params = {
-                    "players": followed_players,
-                    "teams": followed_teams
+        with engine.connect() as connection:
+            result = connection.execute(
+                query,
+                {
+                    'teams': followed_teams,
+                    'players': followed_players,
+                    'limit': per_page,
+                    'offset': (page - 1) * per_page
                 }
+            )
+            recommendations = [{'reel_id': row[0]} for row in result]
 
-                if search_terms:
-                    search_conditions = []
-                    for i, term in enumerate(search_terms):
-                        search_conditions.append(f"""
-                            (LOWER(title) LIKE :term_{i} OR 
-                             LOWER(blurb) LIKE :term_{i} OR 
-                             LOWER(player) LIKE :term_{i} OR
-                             LOWER(home_team) LIKE :term_{i} OR
-                             LOWER(away_team) LIKE :term_{i})
-                        """)
-                        params[f"term_{i}"] = f"%{term}%"
+        # Check if there are more results
+        has_more = len(recommendations) == per_page
 
-                    base_query += " AND " + " AND ".join(search_conditions)
-
-                base_query += """
-                    GROUP BY id, title, blurb
-                    HAVING COUNT(*) > 0
-                    ORDER BY 
-                        CASE 
-                            WHEN LOWER(title) = :exact_title THEN 3
-                            WHEN LOWER(blurb) = :exact_blurb THEN 2
-                            ELSE 0
-                        END DESC,
-                        view_count DESC,
-                        RANDOM()
-                    OFFSET :offset
-                    LIMIT :limit
-                """
-
-                params.update({
-                    "exact_title": search.lower(),
-                    "exact_blurb": search.lower(),
-                    "offset": offset,
-                    "limit": per_page + 1
-                })
-
-                results = conn.execute(text(base_query), params).fetchall()
-
-            if results:
-                has_more = len(results) > per_page
-                recommendations = [{"reel_id": str(row[0])} for row in results[:per_page]]
-                return jsonify({
-                    'success': True,
-                    'recommendations': recommendations,
-                    'has_more': has_more
-                })
-            return jsonify({'success': True, 'recommendations': [], 'has_more': False})
+        return jsonify({
+            'success': True,
+            'recommendations': recommendations,
+            'has_more': has_more
+        })
 
     except Exception as e:
-        logger.error(f"Error fetching follow recommendations: {str(e)}", exc_info=True)
+        logger.error(f"Error getting follow recommendations: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
 
 

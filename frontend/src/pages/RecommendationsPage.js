@@ -225,7 +225,7 @@ function RecommendationsPage() {
                 id,
                 type: "video",
                 title: videoData.success
-                  ? `${videoData.title}`
+                  ? `${videoData.title} `
                   : "Model Recommendation",
                 description: videoData.success ? generated : "",
                 videoUrl: videoData.success ? videoData.video_url : null,
