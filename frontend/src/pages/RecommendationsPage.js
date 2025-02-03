@@ -11,24 +11,112 @@ import { usePreferences } from "../hooks/usePreferences";
 import { format } from "date-fns";
 import axios from "axios";
 
+/**
+ * VideoThumbnail Component
+ *
+ * This component generates a preview thumbnail from a video by:
+ * - Loading the video (with CORS enabled)
+ * - Seeking 0.1 seconds into the video
+ * - Drawing that frame onto a canvas
+ * - Converting it into a data URL
+ *
+ * While loading, a fallback “Loading preview…” is shown.
+ */
+function VideoThumbnail({ videoUrl, className, onClick }) {
+  const [thumbnail, setThumbnail] = useState(null);
+
+  useEffect(() => {
+    let canceled = false;
+    const video = document.createElement("video");
+    video.src = videoUrl;
+    video.crossOrigin = "anonymous"; // ensure CORS is allowed
+    video.preload = "metadata";
+    video.muted = true;
+    video.playsInline = true;
+
+    const handleLoadedMetadata = () => {
+      // Seek a bit into the video to capture a frame (0.1 sec)
+      video.currentTime = video.duration > 0.1 ? 0.1 : 0;
+    };
+
+    const handleSeeked = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext("2d");
+      try {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const dataURL = canvas.toDataURL("image/png");
+        if (!canceled) {
+          setThumbnail(dataURL);
+        }
+      } catch (error) {
+        console.error("Error generating thumbnail:", error);
+      }
+    };
+
+    const handleError = (err) => {
+      console.error("Error loading video for thumbnail:", err);
+    };
+
+    video.addEventListener("loadedmetadata", handleLoadedMetadata);
+    video.addEventListener("seeked", handleSeeked);
+    video.addEventListener("error", handleError);
+    video.load();
+
+    return () => {
+      canceled = true;
+      video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      video.removeEventListener("seeked", handleSeeked);
+      video.removeEventListener("error", handleError);
+    };
+  }, [videoUrl]);
+
+  if (!thumbnail) {
+    return (
+      <div
+        className={className}
+        onClick={onClick}
+        style={{
+          background: "#000",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center"
+        }}
+      >
+        <span style={{ color: "#fff" }}>Loading preview...</span>
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={thumbnail}
+      alt="Video thumbnail"
+      className={className}
+      onClick={onClick}
+    />
+  );
+}
+
 function RecommendationsPage() {
-  // Replace the dummy data with user data from AuthContext
+  // Authentication & preferences
   const { user } = useAuth();
   const { preferences, isLoading: preferencesLoading } = usePreferences();
 
-  // Get followed teams and players from preferences
+  // Followed teams and players from preferences
   const followedTeams = preferences?.teams || [];
   const followedPlayers = preferences?.players || [];
 
-  // Replace dummy upcomingEvents with real state
+  // Upcoming events state
   const [upcomingEvents, setUpcomingEvents] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(true);
 
-  // ---------- Search-related state ----------
+  // Search-related state
   const [searchTerm, setSearchTerm] = useState("");
   const [isSearching, setIsSearching] = useState(false);
 
-  // -------------- Recommendations state ---------------
+  // Recommendations state
   const [followRecommendations, setFollowRecommendations] = useState([]);
   const [modelRecommendations, setModelRecommendations] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -36,14 +124,16 @@ function RecommendationsPage() {
   const [isModelLoaded, setIsModelLoaded] = useState(false);
 
   // Pagination tracking
-  const [currentPage, setCurrentPage] = useState(1); // Only declared once
+  const [currentPage, setCurrentPage] = useState(1);
   const [followHasMore, setFollowHasMore] = useState(true);
   const [modelHasMore, setModelHasMore] = useState(true);
   const [hasMore, setHasMore] = useState(true);
 
-  // -----------------------------------------
-  // Dummy functions to fetch data with search
-  // -----------------------------------------
+  // State to track which video is currently playing (for previews)
+  const [playingVideo, setPlayingVideo] = useState(null);
+
+  // Dummy functions to fetch recommendations
+
   const fetchFollowRecommendations = async (pageNum, theSearchTerm) => {
     try {
       setIsLoadingMore(true);
@@ -62,7 +152,7 @@ function RecommendationsPage() {
       if (data.success && Array.isArray(data.recommendations)) {
         const newRecs = await Promise.all(
           data.recommendations.map(async (rec) => {
-            // For each reel, fetch its video data
+            // For each recommendation, fetch its video data
             const videoRes = await fetch(
               `${process.env.REACT_APP_BACKEND_URL}/api/mlb/video?play_id=${rec.reel_id}`,
               {
@@ -70,12 +160,9 @@ function RecommendationsPage() {
               }
             );
             const videoData = await videoRes.json();
-
-            // For demonstration, generate the description with Gemini
             const generated = await fetchDescriptionFromGemini(
               videoData.title || "MLB Highlight"
             );
-
             return {
               id: rec.reel_id,
               type: "video",
@@ -92,8 +179,6 @@ function RecommendationsPage() {
             };
           })
         );
-
-        // If pageNum=1 and user is searching, we replace old recs
         setFollowRecommendations((prev) =>
           pageNum === 1 ? newRecs : [...prev, ...newRecs]
         );
@@ -108,11 +193,9 @@ function RecommendationsPage() {
 
   const fetchModelRecommendations = async (pageNum, theSearchTerm) => {
     if (!user?.id) return;
-
     try {
       setIsLoading(true);
       const token = localStorage.getItem("auth_token");
-
       const start = (pageNum - 1) * 5;
       const response = await fetch(
         `${process.env.REACT_APP_BACKEND_URL}/recommend/vector?start=${start}`,
@@ -124,12 +207,10 @@ function RecommendationsPage() {
         }
       );
       const data = await response.json();
-
       if (data.success && Array.isArray(data.recommendations)) {
         const newRecs = await Promise.all(
           data.recommendations.map(async (id) => {
             try {
-              // Fetch video data using the same endpoint as fetchFollowRecommendations
               const videoRes = await fetch(
                 `${process.env.REACT_APP_BACKEND_URL}/api/mlb/video?play_id=${id}`,
                 {
@@ -137,12 +218,9 @@ function RecommendationsPage() {
                 }
               );
               const videoData = await videoRes.json();
-
-              // Generate description like fetchFollowRecommendations
               const generated = await fetchDescriptionFromGemini(
                 videoData.title || "MLB Highlight"
               );
-
               return {
                 id,
                 type: "video",
@@ -162,13 +240,11 @@ function RecommendationsPage() {
           })
         );
         const valid = newRecs.filter((r) => r);
-
         if (pageNum === 1) {
           setModelRecommendations(valid);
         } else {
           setModelRecommendations((prev) => [...prev, ...valid]);
         }
-
         setModelHasMore(data.has_more);
         setIsModelLoaded(true);
       } else {
@@ -182,7 +258,7 @@ function RecommendationsPage() {
     }
   };
 
-  // Example "Gemini" fetch for the description
+  // Example Gemini fetch for description generation
   const fetchDescriptionFromGemini = async (title) => {
     try {
       const res = await fetch(
@@ -201,20 +277,19 @@ function RecommendationsPage() {
     }
   };
 
-  // -------------- load initial data on mount --------------
+  // Load initial recommendations on mount
   useEffect(() => {
     fetchFollowRecommendations(1, "");
     fetchModelRecommendations(1, "");
   }, [user?.id]);
 
-  // Combine the two sets of recs in an interleaved manner
+  // Combine the two sets of recommendations in an interleaved manner
   const combinedRecommendations = useMemo(() => {
     const combined = [];
     const maxLength = Math.max(
       followRecommendations.length,
       modelRecommendations.length
     );
-
     for (let i = 0; i < maxLength; i++) {
       if (i < followRecommendations.length) {
         combined.push(followRecommendations[i]);
@@ -223,24 +298,19 @@ function RecommendationsPage() {
         combined.push(modelRecommendations[i]);
       }
     }
-
     return combined;
   }, [followRecommendations, modelRecommendations]);
 
   // Infinity scroll logic
   const sentinelRef = useRef(null);
-
   useEffect(() => {
     const observer = new IntersectionObserver(
       async ([entry]) => {
         if (entry.isIntersecting && !isLoadingMore && hasMore) {
           const nextPage = currentPage + 1;
           setCurrentPage(nextPage);
-
-          // Alternate between follow and model recommendations
           const isEven = nextPage % 2 === 0;
           const pageForRequest = Math.ceil(nextPage / 2);
-
           setIsLoadingMore(true);
           try {
             if (isEven) {
@@ -255,15 +325,12 @@ function RecommendationsPage() {
       },
       { threshold: 0.1 }
     );
-
     if (sentinelRef.current) {
       observer.observe(sentinelRef.current);
     }
-
     return () => observer.disconnect();
   }, [currentPage, isLoadingMore, hasMore, searchTerm]);
 
-  // Check if we have more data to load:
   useEffect(() => {
     setHasMore(followHasMore || modelHasMore);
   }, [followHasMore, modelHasMore]);
@@ -272,13 +339,10 @@ function RecommendationsPage() {
   const handleSearchSubmit = async (e) => {
     e.preventDefault();
     if (!searchTerm.trim()) return;
-
     setIsSearching(true);
     setCurrentPage(1);
     const token = localStorage.getItem("auth_token");
-
     try {
-      // Get search results from vector search endpoint
       const searchResponse = await fetch(
         `${
           process.env.REACT_APP_BACKEND_URL
@@ -291,9 +355,7 @@ function RecommendationsPage() {
         }
       );
       const searchData = await searchResponse.json();
-
       if (searchData.success && Array.isArray(searchData.recommendations)) {
-        // Get video details for each recommendation
         const videoPromises = searchData.recommendations.map(async (id) => {
           const videoRes = await fetch(
             `${process.env.REACT_APP_BACKEND_URL}/api/mlb/video?play_id=${id}`,
@@ -302,12 +364,9 @@ function RecommendationsPage() {
             }
           );
           const videoData = await videoRes.json();
-
-          // Generate description
           const generated = await fetchDescriptionFromGemini(
             videoData.title || "MLB Highlight"
           );
-
           return {
             id,
             type: "video",
@@ -319,16 +378,11 @@ function RecommendationsPage() {
             comments: [],
           };
         });
-
-        const videos = await Promise.all(videoPromises);
-        const validVideos = videos.filter((v) => v.videoUrl);
-
-        // Split results between follow and model recommendations
+        const videosResult = await Promise.all(videoPromises);
+        const validVideos = videosResult.filter((v) => v.videoUrl);
         const halfLength = Math.ceil(validVideos.length / 2);
         setFollowRecommendations(validVideos.slice(0, halfLength));
         setModelRecommendations(validVideos.slice(halfLength));
-
-        // Update pagination state
         setHasMore(searchData.has_more);
         setFollowHasMore(searchData.has_more);
         setModelHasMore(searchData.has_more);
@@ -346,10 +400,9 @@ function RecommendationsPage() {
     }
   };
 
-  // For expansions, new comment, etc. (omitted for brevity)
+  // Additional states for comments, saved videos, votes, etc.
   const [expandedPost, setExpandedPost] = useState(null);
   const [newComment, setNewComment] = useState("");
-
   const [savedVideos, setSavedVideos] = useState(new Set());
 
   // Load saved videos on mount
@@ -364,7 +417,6 @@ function RecommendationsPage() {
         console.error("Error loading saved videos:", error);
       }
     };
-
     if (user) {
       loadSavedVideos();
     }
@@ -376,7 +428,6 @@ function RecommendationsPage() {
         toast.error("Video already saved!");
         return;
       }
-
       const response = await userService.saveVideo(video.videoUrl, video.title);
       if (response.success) {
         setSavedVideos((prev) => new Set([...prev, video.videoUrl]));
@@ -388,13 +439,10 @@ function RecommendationsPage() {
     }
   };
 
-  const [votes, setVotes] = useState({}); // Track votes for each video
-  const [userVotes, setUserVotes] = useState({}); // Track user's votes
-
-  // Handle voting
+  const [votes, setVotes] = useState({});
+  const [userVotes, setUserVotes] = useState({});
   const handleVote = async (videoId, voteType) => {
     try {
-      // If user is trying to vote the same way again, remove their vote
       if (userVotes[videoId] === voteType) {
         await videoService.vote(videoId, "none");
         setUserVotes((prev) => {
@@ -410,13 +458,10 @@ function RecommendationsPage() {
           },
         }));
       } else {
-        // Calculate score change
         let scoreChange = voteType === "up" ? 1 : -1;
         if (userVotes[videoId]) {
-          // If changing vote, double the effect
           scoreChange *= 2;
         }
-
         await videoService.vote(videoId, voteType);
         setUserVotes((prev) => ({
           ...prev,
@@ -435,14 +480,12 @@ function RecommendationsPage() {
     }
   };
 
-  // Load votes for videos
   const loadVotes = async (videoIds) => {
     try {
       const votePromises = videoIds.map((id) => videoService.getVotes(id));
       const voteResults = await Promise.all(votePromises);
       const newVotes = {};
       const newUserVotes = {};
-
       voteResults.forEach((result, index) => {
         if (result.success) {
           const videoId = videoIds[index];
@@ -455,7 +498,6 @@ function RecommendationsPage() {
           }
         }
       });
-
       setVotes((prev) => ({ ...prev, ...newVotes }));
       setUserVotes((prev) => ({ ...prev, ...newUserVotes }));
     } catch (error) {
@@ -463,7 +505,6 @@ function RecommendationsPage() {
     }
   };
 
-  // Load votes when recommendations change
   useEffect(() => {
     if (combinedRecommendations.length > 0) {
       const videoIds = combinedRecommendations.map((rec) => rec.id);
@@ -471,12 +512,10 @@ function RecommendationsPage() {
     }
   }, [combinedRecommendations]);
 
-  const [comments, setComments] = useState({}); // Store comments for each video
-  const [newComments, setNewComments] = useState({}); // Store new comment text for each video
-  const [editingComment, setEditingComment] = useState(null); // Track which comment is being edited
-  const [editText, setEditText] = useState(""); // Store edited comment text
-
-  // Load comments for a video
+  const [comments, setComments] = useState({});
+  const [newComments, setNewComments] = useState({});
+  const [editingComment, setEditingComment] = useState(null);
+  const [editText, setEditText] = useState("");
   const loadComments = async (videoId) => {
     try {
       const response = await videoService.getComments(videoId);
@@ -492,12 +531,18 @@ function RecommendationsPage() {
     }
   };
 
-  // Handle adding a new comment
+  useEffect(() => {
+    if (combinedRecommendations.length > 0) {
+      combinedRecommendations.forEach((rec) => {
+        loadComments(rec.id);
+      });
+    }
+  }, [combinedRecommendations]);
+
   const handleAddComment = async (videoId) => {
     try {
       const content = newComments[videoId]?.trim();
       if (!content) return;
-
       const response = await videoService.addComment(videoId, content);
       if (response.success) {
         setComments((prev) => ({
@@ -516,7 +561,6 @@ function RecommendationsPage() {
     }
   };
 
-  // Handle updating a comment
   const handleUpdateComment = async (commentId, videoId) => {
     try {
       const response = await videoService.updateComment(commentId, editText);
@@ -537,7 +581,6 @@ function RecommendationsPage() {
     }
   };
 
-  // Handle deleting a comment
   const handleDeleteComment = async (commentId, videoId) => {
     try {
       const response = await videoService.deleteComment(commentId);
@@ -641,9 +684,7 @@ function RecommendationsPage() {
             className="flex items-center space-x-2"
           >
             <input
-              className="flex-1 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-2.5
-                         bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100
-                         focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              className="flex-1 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-2.5 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:outline-none"
               placeholder="Search..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -651,8 +692,7 @@ function RecommendationsPage() {
             <button
               type="submit"
               disabled={isSearching}
-              className="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700
-                         disabled:opacity-50 transition-colors"
+              className="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
             >
               {isSearching ? "Searching..." : "Search"}
             </button>
@@ -724,9 +764,7 @@ function RecommendationsPage() {
             {combinedRecommendations.map((item) => (
               <div
                 key={item.id}
-                className="bg-white dark:bg-gray-800 shadow rounded-lg p-4
-                           transition-transform hover:-translate-y-0.5
-                           hover:shadow-lg duration-300 ease-in-out"
+                className="bg-white dark:bg-gray-800 shadow rounded-lg p-4 transition-transform hover:-translate-y-0.5 hover:shadow-lg duration-300 ease-in-out"
               >
                 <div className="flex justify-between items-start mb-2">
                   <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
@@ -788,12 +826,11 @@ function RecommendationsPage() {
                       <button
                         onClick={() => handleSaveVideo(item)}
                         disabled={savedVideos.has(item.videoUrl)}
-                        className={`px-3 py-1 rounded-md text-sm font-medium transition-colors
-                          ${
-                            savedVideos.has(item.videoUrl)
-                              ? "bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed"
-                              : "bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800"
-                          }`}
+                        className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                          savedVideos.has(item.videoUrl)
+                            ? "bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed"
+                            : "bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800"
+                        }`}
                       >
                         {savedVideos.has(item.videoUrl)
                           ? "Saved"
@@ -807,17 +844,24 @@ function RecommendationsPage() {
                   {item.description}
                 </p>
 
-                {/* If it's a video, show the video player */}
+                {/* Video preview section */}
                 {item.type === "video" && item.videoUrl && (
                   <div className="mt-4">
-                    <video
-                      controls
-                      className="w-full rounded-lg"
-                      poster="https://via.placeholder.com/768x432.png?text=Video+Placeholder"
-                    >
-                      <source src={item.videoUrl} type="video/mp4" />
-                      Your browser does not support the video tag.
-                    </video>
+                    {playingVideo === item.id ? (
+                      <video
+                        controls
+                        autoPlay
+                        onEnded={() => setPlayingVideo(null)}
+                        className="w-full rounded-lg"
+                        src={item.videoUrl}
+                      />
+                    ) : (
+                      <VideoThumbnail
+                        videoUrl={item.videoUrl}
+                        className="w-full rounded-lg object-cover cursor-pointer"
+                        onClick={() => setPlayingVideo(item.id)}
+                      />
+                    )}
                   </div>
                 )}
 
@@ -838,15 +882,12 @@ function RecommendationsPage() {
                         }))
                       }
                       placeholder="Add a comment..."
-                      className="flex-1 min-h-[80px] p-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                               bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
-                               focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      className="flex-1 min-h-[80px] p-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                     />
                     <button
                       onClick={() => handleAddComment(item.id)}
                       disabled={!newComments[item.id]?.trim()}
-                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700
-                               disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     >
                       Post
                     </button>
@@ -872,9 +913,7 @@ function RecommendationsPage() {
                                   {comment.user.username}
                                 </span>
                                 <span className="ml-2 text-sm text-gray-500">
-                                  {new Date(
-                                    comment.created_at
-                                  ).toLocaleDateString()}
+                                  {new Date(comment.created_at).toLocaleDateString()}
                                 </span>
                               </div>
                               {comment.user_id === user?.id && (
@@ -904,8 +943,7 @@ function RecommendationsPage() {
                                 <textarea
                                   value={editText}
                                   onChange={(e) => setEditText(e.target.value)}
-                                  className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                                           bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                                  className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                                 />
                                 <div className="mt-2 flex justify-end space-x-2">
                                   <button
@@ -913,8 +951,7 @@ function RecommendationsPage() {
                                       setEditingComment(null);
                                       setEditText("");
                                     }}
-                                    className="px-3 py-1 text-gray-600 dark:text-gray-400
-                                             hover:text-gray-700 dark:hover:text-gray-300"
+                                    className="px-3 py-1 text-gray-600 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
                                   >
                                     Cancel
                                   </button>
@@ -922,8 +959,7 @@ function RecommendationsPage() {
                                     onClick={() =>
                                       handleUpdateComment(comment.id, item.id)
                                     }
-                                    className="px-3 py-1 bg-blue-600 text-white rounded-lg
-                                             hover:bg-blue-700 transition-colors"
+                                    className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
                                   >
                                     Save
                                   </button>
@@ -967,11 +1003,9 @@ function RecommendationsPage() {
                   upcomingEvents.map((event) => (
                     <div
                       key={event.id}
-                      className={`py-3 px-3 border-b last:border-b-0 border-gray-200 dark:border-gray-700 
-                        ${
-                          event.isHome ? "bg-green-50 dark:bg-green-900/20" : ""
-                        } 
-                        rounded-md transition-colors duration-200`}
+                      className={`py-3 px-3 border-b last:border-b-0 border-gray-200 dark:border-gray-700 ${
+                        event.isHome ? "bg-green-50 dark:bg-green-900/20" : ""
+                      } rounded-md transition-colors duration-200`}
                     >
                       <span className="font-medium text-gray-900 dark:text-gray-100 mr-2">
                         {event.date}

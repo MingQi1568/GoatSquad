@@ -17,7 +17,7 @@ genai.configure(api_key=api_key)
 
 def run_gemini_prompt(prompt):
     try:
-        logger.info(f"Running prompt: {prompt[:50]}...")
+        logger.info(f"Running prompt: {prompt}...")
         model = genai.GenerativeModel('gemini-pro')
         response = model.generate_content(prompt)
         if response.text:

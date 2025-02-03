@@ -1,3 +1,5 @@
+from cachetools import TTLCache, cached
+from functools import lru_cache
 from flask import Flask, request, jsonify, Response, redirect, send_from_directory
 from flask_restx import Api, Resource
 from flask_cors import CORS
@@ -8,14 +10,10 @@ from datetime import datetime, timedelta
 import os
 from google.cloud import translate_v2 as translate
 from auth import AuthService, token_required, db, init_admin, SavedVideo, CustomMusic, VideoVote, VideoComment
-import grpc
 from routes.mlb import mlb
 from flask_migrate import Migrate
-from google.cloud.sql.connector import Connector
-import sqlalchemy
-from werkzeug.middleware.proxy_fix import ProxyFix
-from cfknn import recommend_reels, build_and_save_model, run_main
-from db import load_data, add, remove, get_video_url, get_follow_vid, search_feature, rag_recommend_pgvector
+from cfknn import run_main
+from db import add, remove, get_video_url, search_feature, rag_recommend_pgvector
 from sqlalchemy import create_engine
 from sqlalchemy.sql import text
 from gemini import run_gemini_prompt
@@ -27,7 +25,6 @@ from werkzeug.utils import secure_filename
 from tempfile import NamedTemporaryFile
 from imagen import generate_image
 import uuid
-
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -53,20 +50,40 @@ DEFAULT_PREVIEWS = {
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
+CACHE_SIZE = 1024 * 100
+CACHE_TTL = 60 * 15  # 15 minutes
+
+
+@cached(cache=TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL))
+def cached_search_feature(model: str, search: str, amount) -> list:
+    return search_feature(model, search, amount)
+
+
+@cached(cache=TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL))
+def cached_rag_recommend_pgvector(model: str, query: str, start: int) -> list:
+    return rag_recommend_pgvector(model, query, start)
+
+@cached(cache=TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL))
+def cached_get_video_url(play_id: str):
+    return get_video_url(play_id)
+
 def allowed_audio_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_AUDIO_EXTENSIONS
+
 
 def init_connection_pool():
     db_user = os.getenv("DB_USER")
     db_pass = os.getenv("DB_PASS")
     db_name = os.getenv("DB_NAME")
-    
+
     DATABASE_URL = f"postgresql://{db_user}:{db_pass}@34.71.48.54:5432/{db_name}"
     return DATABASE_URL
+
 
 @app.before_request
 def before_request():
     os.chdir(ORIGINAL_DIR)
+
 
 app.config['SQLALCHEMY_DATABASE_URI'] = init_connection_pool()
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -84,11 +101,12 @@ with app.app_context():
 
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-api = Api(app, version='1.0', 
-    title='MLB Fan Feed API',
-    description='API for MLB fan feed features')
+api = Api(app, version='1.0',
+          title='MLB Fan Feed API',
+          description='API for MLB fan feed features')
 
 news_ns = api.namespace('news', description='News operations')
+
 
 @news_ns.route('/digest')
 class NewsDigest(Resource):
@@ -99,23 +117,24 @@ class NewsDigest(Resource):
         try:
             teams = request.args.getlist('teams[]')
             players = request.args.getlist('players[]')
-            
+
             if not teams and not players:
                 return {'error': 'At least one team or player must be specified'}, 400
-            
+
             teams = [t for t in teams if t]
             players = [p for p in players if p]
-                
+
             result = get_news_digest(teams=teams, players=players)
-            
+
             if result['success']:
                 return jsonify(result)
             else:
                 return {'error': result.get('error', 'Unknown error occurred')}, 500
-                
+
         except Exception as e:
             logger.error(f"Unexpected error: {str(e)}", exc_info=True)
             return {'error': 'Internal server error'}, 500
+
 
 @app.route('/api/mlb/highlights')
 def get_highlights():
@@ -123,7 +142,7 @@ def get_highlights():
     try:
         team_id = request.args.get('team_id')
         player_id = request.args.get('player_id')
-        
+
         logger.info(f"Fetching highlights for team {team_id} and player {player_id}")
 
         #first get schedule to find recent games
@@ -140,10 +159,10 @@ def get_highlights():
         schedule_data = schedule_response.json()
 
         all_highlights = []
-        for date in schedule_data.get('dates', [])[:10]:  
+        for date in schedule_data.get('dates', [])[:10]:
             for game in date.get('games', []):
                 game_pk = game.get('gamePk')
-                
+
                 #get game content
                 content_url = f'https://statsapi.mlb.com/api/v1/game/{game_pk}/content'
                 content_response = requests.get(content_url)
@@ -152,10 +171,10 @@ def get_highlights():
 
                 #look for highlights in game content
                 for highlight in content_data.get('highlights', {}).get('highlights', {}).get('items', []):
-                    if any(keyword.get('type') == 'player_id' and 
-                          keyword.get('value') == str(player_id) 
-                          for keyword in highlight.get('keywordsAll', [])):
-                        
+                    if any(keyword.get('type') == 'player_id' and
+                           keyword.get('value') == str(player_id)
+                           for keyword in highlight.get('keywordsAll', [])):
+
                         #get the best quality playback URL
                         playbacks = highlight.get('playbacks', [])
                         if playbacks:
@@ -185,6 +204,7 @@ def get_highlights():
         logger.error(f"Error fetching highlights: {str(e)}", exc_info=True)
         return {'error': 'Failed to fetch highlights'}, 500
 
+
 @app.route('/recommend/add', methods=['POST', 'GET'])
 def add_rating():
     """Add or update a user's rating for a reel"""
@@ -210,6 +230,7 @@ def add_rating():
         logger.error(f"Error adding rating: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
 
+
 @app.route('/recommend/remove', methods=['DELETE'])
 def remove_rating():
     """Remove a user reel rating"""
@@ -227,20 +248,20 @@ def remove_rating():
         logger.error(f"Error removing rating: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
 
+
 @app.route('/recommend/search', methods=['GET'])
 def get_search_recommendations():
     try:
         search = request.args.get('search', '').strip().lower()
         amount = request.args.get('amount', 5)
-        if search: 
-            data = search_feature("embeddings", search, amount)
+        if search:
+            # Use the cached search function instead of calling search_feature directly.
+            data = cached_search_feature("embeddings", search, int(amount))
             ids = [item['id'] for item in data]
-            print("BRUHHHH")
-            print(ids)
             return jsonify({
                 'success': True,
                 'recommendations': ids,
-                'has_more': len(ids) == amount  
+                'has_more': len(ids) == int(amount)
             })
         else:
             return jsonify({
@@ -252,8 +273,10 @@ def get_search_recommendations():
         logger.error(f"Error getting model recommendations: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
 
+
 RANDOM_TEAMS = ['New York Yankees', 'Los Angeles Dodgers', 'Chicago Cubs', 'Boston Red Sox', 'Houston Astros']
 RANDOM_PLAYERS = ['Aaron Judge', 'Mookie Betts', 'Shohei Ohtani', 'Mike Trout', 'Freddie Freeman']
+
 
 @app.route('/recommend/vector', methods=['GET'])
 @token_required
@@ -274,18 +297,19 @@ def get_vector_recommendations(current_user):
 
         query = f"Teams: {', '.join(followed_teams)}. Players: {', '.join(followed_players)}."
 
-        if query: 
-            data = rag_recommend_pgvector("embeddings", query, start)
+        if query:
+            data = cached_rag_recommend_pgvector("embeddings", query, start)
             ids = [item['id'] for item in data]
             return jsonify({
                 'success': True,
                 'recommendations': ids,
-                'has_more': False  
+                'has_more': False
             })
     except Exception as e:
         logger.error(f"Error getting model recommendations: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
-    
+
+
 @app.route('/recommend/predict', methods=['GET'])
 def get_model_recommendations():
     try:
@@ -297,9 +321,9 @@ def get_model_recommendations():
 
         # Break down search terms for better matching
         search_terms = [term.lower() for term in search.split() if term]
-        
+
         offset = (page - 1) * per_page
-        
+
         try:
             # Try to get personalized recommendations first
             recs, has_more = run_main(table, user_id=user_id, num_recommendations=per_page, offset=offset)
@@ -324,9 +348,9 @@ def get_model_recommendations():
                              LOWER(away_team) LIKE :term_{i})
                         """)
                         params[f"term_{i}"] = f"%{term}%"
-                    
+
                     search_clause = " AND ".join(search_conditions)
-                    
+
                     base_query = f"""
                         WITH matched_videos AS (
                             SELECT 
@@ -353,12 +377,12 @@ def get_model_recommendations():
                         OFFSET :offset
                         LIMIT :limit
                     """
-                    
+
                     # Add the exact search parameter
                     params['exact_search'] = search.lower()
                     params['offset'] = offset
                     params['limit'] = per_page + 1
-                    
+
                     results = conn.execute(text(base_query), params).fetchall()
                 else:
                     base_query = """
@@ -398,9 +422,9 @@ def get_model_recommendations():
                          LOWER(away_team) LIKE :term_{i})
                     """)
                     params[param_name] = f"%{term}%"
-                
+
                 search_clause = " AND ".join(search_conditions)
-                
+
                 highlights_query = text(f"""
                     SELECT id, title
                     FROM mlb_highlights
@@ -410,7 +434,7 @@ def get_model_recommendations():
                 highlight_results = conn.execute(highlights_query, params).fetchall()
                 valid_ids = set(row[0] for row in highlight_results)
                 filtered_recs = [r for r in recs if r["reel_id"] in valid_ids]
-          
+
                 return jsonify({
                     'success': True,
                     'recommendations': filtered_recs,
@@ -423,12 +447,13 @@ def get_model_recommendations():
                 'recommendations': recs,
                 'has_more': has_more
             })
-        
+
         return jsonify({'success': True, 'recommendations': [], 'has_more': False})
 
     except Exception as e:
         logger.error(f"Error getting model recommendations: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
+
 
 @app.route('/recommend/follow', methods=['GET'])
 @token_required
@@ -438,7 +463,7 @@ def get_follow_recommendations(current_user):
         page = int(request.args.get('page', default=1))
         per_page = int(request.args.get('per_page', default=5))
         search = request.args.get('search', '').strip()
-        
+
         # Break down search terms
         search_terms = [term.lower() for term in search.split() if term]
 
@@ -472,7 +497,7 @@ def get_follow_recommendations(current_user):
                              LOWER(away_team) LIKE :term_{i})
                         """)
                         params[f"term_{i}"] = f"%{term}%"
-                    
+
                     base_query += " AND " + " AND ".join(search_conditions)
 
                 base_query += """
@@ -526,7 +551,7 @@ def get_follow_recommendations(current_user):
                              LOWER(away_team) LIKE :term_{i})
                         """)
                         params[f"term_{i}"] = f"%{term}%"
-                    
+
                     base_query += " AND " + " AND ".join(search_conditions)
 
                 base_query += """
@@ -567,8 +592,35 @@ def get_follow_recommendations(current_user):
         logger.error(f"Error fetching follow recommendations: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
 
+
+@lru_cache(maxsize=CACHE_SIZE)
+def cached_generate_description(title: str) -> str:
+    """
+    Generates and caches the description for a given title.
+    The LRU cache ensures that if the same title is requested again,
+    the cached result is returned without recomputing the prompt.
+    """
+    prompt = (
+        f"Generate a short and engaging description for the baseball video titled: {title}. "
+        "Keep your response to under 20 words. Your response should start with the content and just one sentence. "
+        "Do not include filler like OK, here is a short and engaging description."
+    )
+    description = run_gemini_prompt(prompt)
+
+    # If the description contains a colon, use the text after it.
+    if description and ':' in description:
+        description = description.split(':', 1)[1].strip()
+
+    return description
+
+
 @app.route('/api/generate-blurb', methods=['POST'])
 def generate_blurb():
+    """
+    API endpoint to generate a short blurb for a given video title.
+    The title is first cleaned of trailing parenthetical content, and then a cached
+    function is used to generate and return the description.
+    """
     data = request.json
     title = data.get('title')
 
@@ -576,15 +628,12 @@ def generate_blurb():
         logger.error("Title is required in the request.")
         return jsonify({"success": False, "message": "Title is required"}), 400
 
+    # Clean the title by removing any trailing content in parentheses
     title = re.sub(r"\s*\([^)]*\)$", "", title)
 
     try:
-        prompt = f"Generate a short and engaging description for the baseball video titled: {title}. Keep your response to under 20 words. Your response should start with the content and just one sentence. Do not include filler like OK, here is a short and engaging description."
-        description = run_gemini_prompt(prompt)
-        
-        if description is not None and ':' in description:
-            description = description.split(':', 1)[1].strip()
-        
+        # Use the cached helper function for generating the description
+        description = cached_generate_description(title)
         if description:
             return jsonify({
                 "success": True,
@@ -606,6 +655,7 @@ def generate_blurb():
 
 translate_client = translate.Client()
 
+
 @app.route('/api/translate', methods=['POST'])
 def translate_text():
     try:
@@ -618,7 +668,6 @@ def translate_text():
                 'success': False,
                 'message': 'No text provided for translation'
             }), 400
-
 
         result = translate_client.translate(
             text,
@@ -639,6 +688,7 @@ def translate_text():
             'error': str(e)
         }), 500
 
+
 @app.errorhandler(Exception)
 def handle_error(error):
     logger.error(f"Unhandled error: {str(error)}", exc_info=True)
@@ -648,7 +698,9 @@ def handle_error(error):
         status_code = error.code
     return jsonify({'success': False, 'message': message}), status_code
 
+
 auth_ns = api.namespace('auth', description='Authentication operations')
+
 
 @auth_ns.route('/register')
 class Register(Resource):
@@ -662,6 +714,7 @@ class Register(Resource):
             logger.error(f"Registration error: {str(e)}", exc_info=True)
             return {'success': False, 'message': str(e)}, 500
 
+
 @auth_ns.route('/login')
 class Login(Resource):
     def post(self):
@@ -673,6 +726,7 @@ class Login(Resource):
         except Exception as e:
             logger.error(f"Login error: {str(e)}", exc_info=True)
             return {'success': False, 'message': str(e)}, 500
+
 
 @auth_ns.route('/profile')
 class UserProfile(Resource):
@@ -704,6 +758,7 @@ class UserProfile(Resource):
             logger.error(f"Profile update error: {str(e)}", exc_info=True)
             return {'success': False, 'message': str(e)}, 500
 
+
 @app.route('/test')
 def test():
     """Test endpoint to verify server is running"""
@@ -716,12 +771,13 @@ def test():
 
 app.register_blueprint(mlb)
 
+
 @app.route('/api/mlb/schedule', methods=['GET'])
 def get_mlb_schedule():
     team_id = request.args.get('teamId')
     start_date = request.args.get('startDate')
     end_date = request.args.get('endDate')
-    
+
     try:
         response = requests.get(
             'https://statsapi.mlb.com/api/v1/schedule',
@@ -737,6 +793,7 @@ def get_mlb_schedule():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
 @app.route('/api/preferences', methods=['GET', 'PUT'])
 @token_required
 def handle_preferences(current_user):
@@ -748,14 +805,14 @@ def handle_preferences(current_user):
                 'players': current_user.followed_players or []
             }
         })
-    
+
     elif request.method == 'PUT':
         try:
             data = request.get_json()
             current_user.followed_teams = data.get('teams', [])
             current_user.followed_players = data.get('players', [])
             db.session.commit()
-            
+
             return jsonify({
                 'success': True,
                 'message': 'Preferences updated successfully',
@@ -771,6 +828,7 @@ def handle_preferences(current_user):
                 'message': str(e)
             }), 500
 
+
 @app.route('/api/mlb/teams', methods=['GET'])
 def get_mlb_teams():
     try:
@@ -785,7 +843,7 @@ def get_mlb_teams():
             }
         )
         logger.info(f"MLB API Response Status: {response.status_code}")
-        
+
         #add caching headers
         response_data = response.json()
         resp = jsonify({
@@ -794,7 +852,7 @@ def get_mlb_teams():
         })
         resp.cache_control.max_age = 3600  #cache for 1 hour
         return resp
-        
+
     except requests.exceptions.Timeout:
         logger.error("Timeout while fetching MLB teams")
         #return cached data if available
@@ -803,20 +861,21 @@ def get_mlb_teams():
             'message': 'Request to MLB API timed out. Please try again.',
             'error': 'TIMEOUT'
         }), 504
-        
+
     except requests.exceptions.RequestException as e:
         logger.error(f"Error fetching MLB teams: {str(e)}", exc_info=True)
         return jsonify({
             'success': False,
             'message': f'Failed to fetch teams from MLB API: {str(e)}'
         }), 500
-        
+
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}", exc_info=True)
         return jsonify({
             'success': False,
             'message': f'An unexpected error occurred: {str(e)}'
         }), 500
+
 
 @app.errorhandler(requests.exceptions.RequestException)
 def handle_request_error(error):
@@ -827,6 +886,7 @@ def handle_request_error(error):
         'error': str(error)
     }), 500
 
+
 @app.errorhandler(Exception)
 def handle_general_error(error):
     logger.error(f"Unexpected error: {str(error)}")
@@ -836,6 +896,7 @@ def handle_general_error(error):
         'error': str(error)
     }), 500
 
+
 @app.route('/api/test', methods=['GET'])
 def test_endpoint():
     return jsonify({
@@ -844,15 +905,17 @@ def test_endpoint():
         'timestamp': datetime.utcnow().isoformat()
     })
 
+
 @app.route('/api/perform-action', methods=['POST'])
 def perform_action():
     try:
-        user_id = 10  
-        num_recommendations = 5  
-        table = 'user_ratings_db'  
-        
-        recommendations = run_main(table, user_id=user_id, num_recommendations=num_recommendations, model_path='knn_model.pkl')
-        
+        user_id = 10
+        num_recommendations = 5
+        table = 'user_ratings_db'
+
+        recommendations = run_main(table, user_id=user_id, num_recommendations=num_recommendations,
+                                   model_path='knn_model.pkl')
+
         return jsonify({
             'success': True,
             'message': 'Recommendations generated successfully!',
@@ -870,6 +933,7 @@ def perform_action():
             'message': str(e)
         }), 500
 
+
 @app.route('/api/mlb/video', methods=['GET'])
 def get_video_url_endpoint():
     """Get video URL and metadata from database using play ID"""
@@ -878,7 +942,7 @@ def get_video_url_endpoint():
         if not play_id:
             return jsonify({'success': False, 'message': 'Play ID is required'}), 400
 
-        video_data = get_video_url(play_id)
+        video_data = cached_get_video_url(play_id)
         if not video_data:
             return jsonify({'success': False, 'message': 'Video not found'}), 404
 
@@ -893,6 +957,7 @@ def get_video_url_endpoint():
         logger.error(f"Error fetching video URL: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
 
+
 @app.route('/api/showcase/compile', methods=['POST'])
 @token_required
 def compile_showcase(current_user):
@@ -903,9 +968,9 @@ def compile_showcase(current_user):
         quality = data.get('quality')
         original_volume = data.get('originalVolume')
         music_volume = data.get('musicVolume')
-        
+
         logger.info(f"Compiling showcase with audio track: {audio_track}")
-        
+
         if not video_urls:
             return jsonify({
                 'success': False,
@@ -929,7 +994,7 @@ def compile_showcase(current_user):
                             f"1_{current_user.client_id}_{track.filename}",
                             f"1_{track.filename}"
                         ]
-                        
+
                         # Try different possible paths for each filename
                         found_blob = None
                         for filename in possible_filenames:
@@ -939,7 +1004,7 @@ def compile_showcase(current_user):
                                 f"custom/{filename}",
                                 filename
                             ]
-                            
+
                             for path in possible_paths:
                                 logger.info(f"Checking GCS path: {path}")
                                 blob = bucket.blob(path)
@@ -947,10 +1012,10 @@ def compile_showcase(current_user):
                                     logger.info(f"Found audio file in GCS at: {path}")
                                     found_blob = blob
                                     break
-                            
+
                             if found_blob:
                                 break
-                        
+
                         if found_blob:
                             audio_url = f"gs://goatbucket1/{found_blob.name}"
                             logger.info(f"Using audio track from GCS: {audio_url}")
@@ -978,13 +1043,14 @@ def compile_showcase(current_user):
                         logger.error(f"Default audio track not found in GCS: {gcs_path}")
                         return jsonify({'success': False, 'message': 'Selected audio track not found'}), 404
 
-        output_uri = generate_videos(video_urls, current_user.client_id, audio_url,quality=quality, original_volume=original_volume,music_volume=music_volume)
-        
+        output_uri = generate_videos(video_urls, current_user.client_id, audio_url, quality=quality,
+                                     original_volume=original_volume, music_volume=music_volume)
+
         return jsonify({
             'success': True,
             'output_uri': output_uri
         })
-        
+
     except Exception as e:
         logger.error(f"Error compiling showcase: {str(e)}", exc_info=True)
         return jsonify({
@@ -992,22 +1058,23 @@ def compile_showcase(current_user):
             'message': str(e)
         }), 500
 
+
 @app.route('/api/videos/saved', methods=['GET', 'POST', 'DELETE'])
 @token_required
 def handle_saved_videos(current_user):
     if request.method == 'GET':
         try:
             saved_videos = SavedVideo.query.filter_by(user_id=current_user.client_id).all()
-            
+
             storage_client = storage.Client()
             bucket = storage_client.bucket('goatbucket1')
-            
+
             videos_with_signed_urls = []
             for video in saved_videos:
                 try:
                     video_url = video.video_url
                     blob_path = None
-                    
+
                     if video_url.startswith('gs://'):
                         parts = video_url.replace('gs://', '').split('/', 1)
                         if len(parts) == 2:
@@ -1026,7 +1093,7 @@ def handle_saved_videos(current_user):
                             'createdAt': video.created_at.isoformat() if video.created_at else None
                         })
                         continue
-                    
+
                     if blob_path:
                         blob = bucket.blob(blob_path)
                         if blob.exists():
@@ -1049,7 +1116,7 @@ def handle_saved_videos(current_user):
                                 'title': video.title,
                                 'createdAt': video.created_at.isoformat() if video.created_at else None
                             })
-                    
+
                 except Exception as e:
                     logger.error(f"Error processing video {video.id}: {str(e)}")
                     # include the video with original URL if processing fails
@@ -1059,7 +1126,7 @@ def handle_saved_videos(current_user):
                         'title': video.title,
                         'createdAt': video.created_at.isoformat() if video.created_at else None
                     })
-            
+
             return jsonify({
                 'success': True,
                 'videos': videos_with_signed_urls
@@ -1131,6 +1198,7 @@ def handle_saved_videos(current_user):
             logger.error(f"Error deleting saved video: {str(e)}", exc_info=True)
             return jsonify({'success': False, 'message': str(e)}), 500
 
+
 def upload_to_gcs_in_memory(file_obj, bucket_name, destination_blob_name):
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
@@ -1139,37 +1207,38 @@ def upload_to_gcs_in_memory(file_obj, bucket_name, destination_blob_name):
     blob.make_public()
     return blob.public_url
 
+
 @app.route("/api/generate-avatar", methods=["GET"])
-@token_required  
+@token_required
 def generate_avatar(current_user):
     followed_players = [player.get('fullName', '') for player in (current_user.followed_players or [])]
     chosen_player = random.choice(followed_players) if followed_players else "Shohei Ohtani"
-    
+
     try:
         prompt = f"Cartoon {chosen_player}, the baseball player"
         image_path = generate_image(prompt, "sticker.png", "691596640324", "us-central1")
-        
+
         user_id = current_user.client_id
         unique_id = str(uuid.uuid4())
         blob_name = f"avatars/{user_id}_{unique_id}.png"
-    
+
         with open(image_path, "rb") as image_file:
             public_url = upload_to_gcs_in_memory(image_file, "pfp_bucket", blob_name)
-        
+
         # Update the database with the new avatar URL
         try:
             current_user.avatarurl = public_url
             db.session.commit()
-            
+
             # Clean up the temporary image file
             os.remove(image_path)
-            
+
             return jsonify({
-                "success": True, 
+                "success": True,
                 "url": public_url,
                 "message": "Avatar updated successfully"
             }), 200
-            
+
         except Exception as db_error:
             logger.error(f"Database error: {str(db_error)}")
             db.session.rollback()
@@ -1182,6 +1251,7 @@ def generate_avatar(current_user):
         logger.error(f"Avatar generation error: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+
 @app.route('/audio/previews/<filename>')
 def serve_audio_preview(filename):
     """Serve audio preview files from GCS"""
@@ -1189,26 +1259,27 @@ def serve_audio_preview(filename):
         storage_client = storage.Client()
         bucket = storage_client.bucket('goatbucket1')
         blob = bucket.blob(f"highlightMusic/previews/{filename}")
-        
+
         if not blob.exists():
             logger.warning(f"Preview file not found in GCS: {filename}")
             return jsonify({
                 'success': False,
                 'message': 'Audio preview file not found.'
             }), 404
-        
+
         signed_url = blob.generate_signed_url(
             version="v4",
             expiration=timedelta(hours=1),
             method="GET"
         )
-        
+
         # redirect to the signed URL
         return redirect(signed_url)
-        
+
     except Exception as e:
         logger.error(f"Error serving audio preview: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': 'Failed to load audio preview'}), 500
+
 
 @app.route('/api/custom-music', methods=['POST'])
 @token_required
@@ -1217,11 +1288,11 @@ def upload_custom_music(current_user):
     try:
         if 'music' not in request.files:
             return jsonify({'success': False, 'message': 'No file provided'}), 400
-            
+
         file = request.files['music']
         if not file or not file.filename:
             return jsonify({'success': False, 'message': 'No file selected'}), 400
-            
+
         if not allowed_audio_file(file.filename):
             return jsonify({'success': False, 'message': 'Invalid file type'}), 400
 
@@ -1234,7 +1305,7 @@ def upload_custom_music(current_user):
         storage_client = storage.Client()
         bucket = storage_client.bucket('goatbucket1')
         blob = bucket.blob(gcs_path)
-        
+
         # Create a temporary file to store the upload
         with NamedTemporaryFile(delete=False) as temp_file:
             file.save(temp_file.name)
@@ -1266,6 +1337,7 @@ def upload_custom_music(current_user):
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 500
 
+
 @app.route('/api/custom-music', methods=['GET'])
 @token_required
 def get_custom_music(current_user):
@@ -1285,6 +1357,7 @@ def get_custom_music(current_user):
         logger.error(f"Error fetching custom music: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
 
+
 @app.route('/audio/custom/<filename>')
 def serve_custom_audio(filename):
     """Serve custom audio files"""
@@ -1294,14 +1367,15 @@ def serve_custom_audio(filename):
             user_id=current_user.client_id,
             filename=filename
         ).first()
-        
+
         if not track:
             return jsonify({'success': False, 'message': 'File not found'}), 404
-            
+
         return send_from_directory(os.path.join(app.config['UPLOAD_FOLDER'], 'custom'), filename)
     except Exception as e:
         logger.error(f"Error serving custom audio: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': 'Failed to load audio file'}), 500
+
 
 @app.route('/api/showcase/download/<user_id>', methods=['GET'])
 @token_required
@@ -1311,32 +1385,33 @@ def download_showcase(current_user, user_id):
         logger.info(f"Download requested for user_id: {user_id}, current_user: {current_user.client_id}")
         if str(current_user.client_id) != str(user_id):
             return jsonify({'success': False, 'message': 'Unauthorized'}), 403
-            
+
         storage_client = storage.Client()
         bucket = storage_client.bucket("goatbucket1")
-        
+
         prefix = f"completeHighlights/{user_id}"
         blobs = list(bucket.list_blobs(prefix=prefix))
-        
+
         if not blobs:
             logger.error(f"No videos found for user {user_id}")
             return jsonify({'success': False, 'message': 'Video not found'}), 404
-            
+
         blob = blobs[-1]
         logger.info(f"Found video: {blob.name}")
 
         logger.info("Downloading video content...")
         video_content = blob.download_as_bytes()
         logger.info(f"Downloaded {len(video_content)} bytes")
-        
+
         response = Response(video_content)
         response.headers['Content-Type'] = 'video/mp4'
         response.headers['Content-Disposition'] = f'attachment; filename=highlight-reel-{user_id}.mp4'
         return response
-        
+
     except Exception as e:
         logger.error(f"Error downloading showcase: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
+
 
 @app.route('/api/videos/<video_id>/vote', methods=['POST'])
 @token_required
@@ -1390,6 +1465,7 @@ def vote_video(current_user, video_id):
         db.session.rollback()
         return jsonify({'success': False, 'message': 'Failed to record vote'}), 500
 
+
 @app.route('/api/videos/<video_id>/votes', methods=['GET'])
 @token_required
 def get_video_votes(current_user, video_id):
@@ -1416,16 +1492,17 @@ def get_video_votes(current_user, video_id):
         logger.error(f"Error getting votes: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': 'Failed to get votes'}), 500
 
+
 @app.route('/api/videos/<video_id>/comments', methods=['GET', 'POST'])
 @token_required
 def handle_video_comments(current_user, video_id):
     """Get or add comments for a video"""
     if request.method == 'GET':
         try:
-            comments = VideoComment.query.filter_by(video_id=video_id)\
-                .order_by(VideoComment.created_at.desc())\
+            comments = VideoComment.query.filter_by(video_id=video_id) \
+                .order_by(VideoComment.created_at.desc()) \
                 .all()
-            
+
             return jsonify({
                 'success': True,
                 'comments': [comment.to_dict() for comment in comments]
@@ -1458,6 +1535,7 @@ def handle_video_comments(current_user, video_id):
             logger.error(f"Error adding comment: {str(e)}", exc_info=True)
             db.session.rollback()
             return jsonify({'success': False, 'message': 'Failed to add comment'}), 500
+
 
 @app.route('/api/videos/comments/<comment_id>', methods=['PUT', 'DELETE'])
 @token_required
@@ -1497,6 +1575,7 @@ def handle_single_comment(current_user, comment_id):
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 500
 
+
 @app.route('/api/user/profile', methods=['GET'])
 @token_required
 def get_user_profile(current_user):
@@ -1513,9 +1592,10 @@ def get_user_profile(current_user):
             'message': 'Failed to fetch user profile'
         }), 500
 
+
 if __name__ == '__main__':
     app.run(
-        host='0.0.0.0', 
+        host='0.0.0.0',
         port=int(os.getenv('BACKEND_PORT', 5000)),
         debug=True,
         use_reloader=False

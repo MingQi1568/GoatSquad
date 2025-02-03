@@ -5,6 +5,73 @@ import PageTransition from '../components/PageTransition';
 import TranslatedText from '../components/TranslatedText';
 import { toast } from 'react-hot-toast';
 
+/**
+ * VideoThumbnail Component
+ *
+ * This component creates a thumbnail image by loading the video,
+ * seeking to a short time, drawing a frame onto a canvas, and converting it to a data URL.
+ */
+function VideoThumbnail({ videoUrl, className, onClick }) {
+  const [thumbnail, setThumbnail] = useState(null);
+
+  useEffect(() => {
+    const video = document.createElement('video');
+    video.src = videoUrl;
+    video.crossOrigin = 'anonymous'; // Ensure CORS is allowed
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+    video.onloadeddata = () => {
+      // Seek a little bit into the video to capture a frame.
+      // Using 0.1 seconds instead of 0 helps avoid black frames.
+      video.currentTime = video.duration < 0.1 ? 0 : 0.1;
+    };
+    video.onseeked = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      try {
+        const dataURL = canvas.toDataURL('image/png');
+        setThumbnail(dataURL);
+      } catch (error) {
+        console.error('Error generating thumbnail', error);
+      }
+    };
+    video.onerror = (err) => {
+      console.error('Error loading video for thumbnail', err);
+    };
+  }, [videoUrl]);
+
+  if (!thumbnail) {
+    // While the thumbnail is being generated, display a fallback placeholder.
+    return (
+      <div
+        className={className}
+        onClick={onClick}
+        style={{
+          background: '#000',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center'
+        }}
+      >
+        <span style={{ color: '#fff' }}>Loading...</span>
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={thumbnail}
+      alt="Video thumbnail"
+      className={className}
+      onClick={onClick}
+    />
+  );
+}
+
 function ShowcaseCompilation() {
   const [isLoading, setIsLoading] = useState(false);
   const [outputUri, setOutputUri] = useState(null);
@@ -27,13 +94,13 @@ function ShowcaseCompilation() {
     {
       category: 'Energetic',
       tracks: [
-        { 
+        {
           id: 'rock_anthem',
           label: 'Rock Anthem',
           description: 'High-energy rock track perfect for intense moments',
           previewUrl: `${process.env.REACT_APP_BACKEND_URL}/audio/previews/rock_anthem_preview.mp3`
         },
-        { 
+        {
           id: 'hiphop_vibes',
           label: 'Hip-Hop Vibes',
           description: 'Modern hip-hop beat with dynamic rhythm',
@@ -44,7 +111,7 @@ function ShowcaseCompilation() {
     {
       category: 'Dramatic',
       tracks: [
-        { 
+        {
           id: 'cinematic_theme',
           label: 'Cinematic Theme',
           description: 'Epic orchestral track for dramatic highlights',
@@ -55,7 +122,7 @@ function ShowcaseCompilation() {
     {
       category: 'Fun',
       tracks: [
-        { 
+        {
           id: 'funky_groove',
           label: 'Funky Groove',
           description: 'Upbeat funky track for lighthearted moments',
@@ -95,7 +162,7 @@ function ShowcaseCompilation() {
         `${process.env.REACT_APP_BACKEND_URL}/api/custom-music`,
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+            Authorization: `Bearer ${localStorage.getItem('auth_token')}`
           }
         }
       );
@@ -135,7 +202,7 @@ function ShowcaseCompilation() {
         formData,
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+            Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
             'Content-Type': 'multipart/form-data'
           }
         }
@@ -158,9 +225,9 @@ function ShowcaseCompilation() {
   };
 
   const handleVideoSelect = (videoId) => {
-    setSelectedVideos(prev => {
+    setSelectedVideos((prev) => {
       if (prev.includes(videoId)) {
-        return prev.filter(id => id !== videoId);
+        return prev.filter((id) => id !== videoId);
       } else {
         return [...prev, videoId];
       }
@@ -192,7 +259,7 @@ function ShowcaseCompilation() {
     // Create new audio element for the preview
     const audio = new Audio(track.previewUrl);
     audio.addEventListener('ended', () => setPlayingPreview(null));
-    audio.play().catch(error => {
+    audio.play().catch((error) => {
       console.error('Error playing preview:', error);
       toast.error('Failed to play music preview');
     });
@@ -212,19 +279,17 @@ function ShowcaseCompilation() {
       setError(null);
       setProgress('Starting compilation...');
       setOutputUri(null);
-      
+
       const selectedVideoUrls = savedVideos
-        .filter(video => selectedVideos.includes(video.id))
-        .map(video => video.videoUrl);
+        .filter((video) => selectedVideos.includes(video.id))
+        .map((video) => video.videoUrl);
 
-      console.log('Selected video URLs:', selectedVideoUrls);
-
-      if (selectedVideoUrls.some(url => !url)) {
+      if (selectedVideoUrls.some((url) => !url)) {
         throw new Error('Some selected videos have invalid URLs');
       }
 
       setProgress('Uploading videos...');
-      
+
       const response = await axios.post(
         `${process.env.REACT_APP_BACKEND_URL}/api/showcase/compile`,
         {
@@ -236,12 +301,10 @@ function ShowcaseCompilation() {
         },
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+            Authorization: `Bearer ${localStorage.getItem('auth_token')}`
           }
         }
       );
-
-      console.log('Compilation response:', response.data);
 
       if (response.data.success) {
         setProgress('Compilation complete! Processing video...');
@@ -262,69 +325,47 @@ function ShowcaseCompilation() {
 
   const handleDownload = async () => {
     try {
-      // Extract just the user ID from the URI
-      // From format: https://storage.googleapis.com/goatbucket1/completeHighlights/1_1738349227.mp4
+      // Extract the user ID from the URI.
       const userId = outputUri.split('/completeHighlights/')[1].split('_')[0];
-      console.log('Downloading for user ID:', userId);
-      console.log('Full output URI:', outputUri);
-      
       const response = await fetch(
         `${process.env.REACT_APP_BACKEND_URL}/api/showcase/download/${userId}`,
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+            Authorization: `Bearer ${localStorage.getItem('auth_token')}`
           }
         }
       );
-      
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.message || `Download failed with status: ${response.status}`);
       }
-      
-      // Check content type
+
       const contentType = response.headers.get('content-type');
       if (!contentType || !contentType.includes('video/mp4')) {
         console.error('Unexpected content type:', contentType);
       }
-      
-      // Get the blob from response
+
       const blob = await response.blob();
-      console.log('Downloaded blob size:', blob.size);
-      
+
       if (blob.size === 0) {
         throw new Error('Downloaded file is empty');
       }
-      
-      // Create download link
+
       const downloadUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = downloadUrl;
-      
-      // Set filename
       const filename = `highlight-reel-${new Date().toISOString().split('T')[0]}.mp4`;
       link.setAttribute('download', filename);
-      
-      // Trigger download
       document.body.appendChild(link);
       link.click();
-      
-      // Cleanup
       document.body.removeChild(link);
       window.URL.revokeObjectURL(downloadUrl);
-      
+
       toast.success('Download started!');
     } catch (error) {
       console.error('Download error:', error);
       toast.error(`Failed to download video: ${error.message}`);
-    }
-  };
-
-  const handleVideoPreview = (videoId) => {
-    if (playingVideo === videoId) {
-      setPlayingVideo(null);
-    } else {
-      setPlayingVideo(videoId);
     }
   };
 
@@ -346,7 +387,7 @@ function ShowcaseCompilation() {
                 <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
                   {savedVideos.map((video) => (
                     <div
-                      key={video.id}
+                      key={`video-${video.id}`}
                       className={`relative p-4 border rounded-lg transition-all
                         ${selectedVideos.includes(video.id)
                           ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
@@ -354,40 +395,21 @@ function ShowcaseCompilation() {
                         }`}
                     >
                       <div className="aspect-video mb-2 relative group">
-                        <video
-                          className="w-full h-full object-cover rounded"
-                          src={video.videoUrl}
-                          poster="https://via.placeholder.com/640x360.png?text=Video+Thumbnail"
-                          controls={playingVideo === video.id}
-                          autoPlay={playingVideo === video.id}
-                          onEnded={() => setPlayingVideo(null)}
-                        />
-                        <div 
-                          className={`absolute inset-0 flex items-center justify-center 
-                            ${playingVideo === video.id ? 'hidden' : 'group-hover:bg-black/50'}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleVideoPreview(video.id);
-                          }}
-                        >
-                          <button
-                            className={`p-3 rounded-full bg-white/90 text-gray-900 
-                              opacity-0 group-hover:opacity-100 transition-opacity
-                              hover:bg-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500`}
-                          >
-                            {playingVideo === video.id ? (
-                              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
-                              </svg>
-                            ) : (
-                              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                              </svg>
-                            )}
-                          </button>
-                        </div>
+                        {playingVideo === video.id ? (
+                          <video
+                            className="w-full h-full object-cover rounded"
+                            src={video.videoUrl}
+                            controls
+                            autoPlay
+                            onEnded={() => setPlayingVideo(null)}
+                          />
+                        ) : (
+                          <VideoThumbnail
+                            videoUrl={video.videoUrl}
+                            className="w-full h-full object-cover rounded cursor-pointer"
+                            onClick={() => setPlayingVideo(video.id)}
+                          />
+                        )}
                       </div>
                       <div className="flex items-center justify-between">
                         <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
@@ -468,7 +490,7 @@ function ShowcaseCompilation() {
                     <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
                       {customTracks.map((track) => (
                         <div
-                          key={track.id}
+                          key={`custom-${track.id}`}
                           className={`p-4 rounded-lg border transition-all cursor-pointer
                             ${selectedTrack === `custom_${track.id}`
                               ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
@@ -493,7 +515,7 @@ function ShowcaseCompilation() {
                                 });
                               }}
                               className="p-2 text-blue-600 hover:text-blue-700 dark:text-blue-400"
-                              title={playingPreview === `custom_${track.id}` ? "Stop Preview" : "Play Preview"}
+                              title={playingPreview === `custom_${track.id}` ? 'Stop Preview' : 'Play Preview'}
                             >
                               {playingPreview === `custom_${track.id}` ? (
                                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -530,14 +552,14 @@ function ShowcaseCompilation() {
                     <TranslatedText text="Default Tracks" />
                   </h3>
                   {BACKGROUND_TRACKS.map((category) => (
-                    <div key={category.category} className="space-y-3">
+                    <div key={`category-${category.category}`} className="space-y-3">
                       <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300">
                         {category.category}
                       </h4>
                       <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
                         {category.tracks.map((track) => (
                           <div
-                            key={track.id}
+                            key={`default-${track.id}`}
                             className={`p-4 rounded-lg border transition-all cursor-pointer
                               ${selectedTrack === track.id
                                 ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
@@ -559,7 +581,7 @@ function ShowcaseCompilation() {
                                   handlePreviewPlay(track);
                                 }}
                                 className="p-2 text-blue-600 hover:text-blue-700 dark:text-blue-400"
-                                title={playingPreview === track.id ? "Stop Preview" : "Play Preview"}
+                                title={playingPreview === track.id ? 'Stop Preview' : 'Play Preview'}
                               >
                                 {playingPreview === track.id ? (
                                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -692,7 +714,9 @@ function ShowcaseCompilation() {
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
-                    <span><TranslatedText text="Compiling... This may take a few minutes." /></span>
+                    <span>
+                      <TranslatedText text="Compiling... This may take a few minutes." />
+                    </span>
                   </div>
                 ) : (
                   <TranslatedText text="Create Highlight Reel" />
@@ -717,8 +741,8 @@ function ShowcaseCompilation() {
                     <TranslatedText text="Your Highlight Reel is Ready!" />
                   </h2>
                   <div className="mt-4">
-                    <video 
-                      controls 
+                    <video
+                      controls
                       className="w-full rounded-lg shadow-lg"
                       poster="/images/video-placeholder.png"
                     >
@@ -726,8 +750,8 @@ function ShowcaseCompilation() {
                       Your browser does not support the video tag.
                     </video>
                   </div>
-                  
-                  {/* Add shareable URL section */}
+
+                  {/* Shareable URL */}
                   <div className="mt-4 p-4 bg-white dark:bg-gray-700 rounded-lg">
                     <h3 className="text-sm font-medium mb-2">
                       <TranslatedText text="Share your highlight reel:" />
@@ -750,28 +774,32 @@ function ShowcaseCompilation() {
                       </button>
                     </div>
                   </div>
-                  
+
                   {/* Download button */}
                   <div className="mt-4 flex justify-center">
                     <button
                       onClick={handleDownload}
-                      className="inline-flex items-center px-4 py-2 border border-transparent 
-                                 rounded-md shadow-sm text-sm font-medium text-white 
-                                 bg-blue-600 hover:bg-blue-700 focus:outline-none 
+                      className="inline-flex items-center px-4 py-2 border border-transparent
+                                 rounded-md shadow-sm text-sm font-medium text-white
+                                 bg-blue-600 hover:bg-blue-700 focus:outline-none
                                  focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                     >
-                      <svg 
-                        className="mr-2 -ml-1 h-5 w-5" 
-                        xmlns="http://www.w3.org/2000/svg" 
-                        viewBox="0 0 20 20" 
+                      <svg
+                        className="mr-2 -ml-1 h-5 w-5"
+                        xmlns="http://www.w3.org/2000/svg"
+                        viewBox="0 0 20 20"
                         fill="currentColor"
                       >
-                        <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
+                        <path
+                          fillRule="evenodd"
+                          d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z"
+                          clipRule="evenodd"
+                        />
                       </svg>
                       <TranslatedText text="Download Highlight Reel" />
                     </button>
                   </div>
-                  
+
                   <p className="mt-4 text-sm">
                     <TranslatedText text="Note: The video may take a few minutes to be fully processed and available for viewing." />
                   </p>
