@@ -82,9 +82,10 @@ with app.app_context():
         logger.error(f"Database initialization error: {str(e)}")
         db.session.rollback()
 
+allowed_origin = os.getenv("CORS_ORIGIN", "http://localhost:3000")
 CORS(app, resources={
     r"/*": {
-        "origins": ["http://localhost:3000"],
+        "origins": [allowed_origin],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
         "expose_headers": ["Content-Range", "X-Content-Range"],
