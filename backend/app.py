@@ -25,6 +25,9 @@ import random
 from google.cloud import storage
 from werkzeug.utils import secure_filename
 from tempfile import NamedTemporaryFile
+from imagen import generate_image
+import uuid
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1135,6 +1138,36 @@ def handle_saved_videos(current_user):
             db.session.rollback()
             logger.error(f"Error deleting saved video: {str(e)}", exc_info=True)
             return jsonify({'success': False, 'message': str(e)}), 500
+
+def upload_to_gcs_in_memory(file_obj, bucket_name, destination_blob_name):
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(destination_blob_name)
+    blob.upload_from_file(file_obj, content_type='image/png')
+    blob.make_public()
+    return blob.public_url
+
+@app.route("/api/generate-avatar", methods=["GET"])
+@token_required  
+def generate_avatar(current_user):
+    followed_players = [player.get('fullName', '') for player in (current_user.followed_players or [])]
+    chosen_player = random.choice(followed_players) if followed_players else "Shohei Ohtani"
+    
+    try:
+        prompt = f"Cartoon {chosen_player}, the baseball player"
+        image_path = generate_image(prompt, "sticker.png", "691596640324", "us-central1")
+        
+        user_id = current_user.client_id
+        unique_id = str(uuid.uuid4())
+        blob_name = f"avatars/{user_id}_{unique_id}.png"
+    
+        with open(image_path, "rb") as image_file:
+            public_url = upload_to_gcs_in_memory(image_file, "pfp_bucket", blob_name)
+        
+        return jsonify({"success": True, "url": public_url}), 200
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/audio/previews/<filename>')
 def serve_audio_preview(filename):
