@@ -1,7 +1,7 @@
 from sqlalchemy import create_engine, text
 import os
 
-# Load database URL from environment or replace with actual connection string
+# TODO: Load database URL from environment or replace with actual connection string
 DATABASE_URL = "postgresql+psycopg2://postgres:vibhas69@34.71.48.54:5432/user_ratings_db"
 
 # Create SQLAlchemy engine

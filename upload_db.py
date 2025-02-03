@@ -3,7 +3,7 @@ from sqlalchemy import create_engine
 
 # Define database connection parameters
 DB_USER = 'postgres'        # Replace with your database username
-DB_PASSWORD = 'vibhas69'    # Replace with your database password
+DB_PASSWORD = 'PW'    # Replace with your database password
 DB_HOST = '34.71.48.54'         # Replace with your database host (e.g., <instance>.cloudsql.<region>.gcp)
 DB_PORT = '5432'                 # Default PostgreSQL port
 DB_NAME = 'user_ratings_db'   # Replace with your database name
