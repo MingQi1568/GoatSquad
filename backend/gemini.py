@@ -44,6 +44,3 @@ def generate_embeddings(text):
     except Exception as e:
         logger.error(f"Error generating embeddings: {str(e)}", exc_info=True)
         return []
-
-
-run_gemini_prompt("calvin")
