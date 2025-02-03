@@ -1,6 +1,12 @@
 {
+  "scripts": {
+    "backend": "cd backend && python app.py",
+    "frontend": "cd frontend && npm run dev",
+    "start": "concurrently \"npm run backend\" \"npm run frontend\""
+  },
   "devDependencies": {
-    "@tailwindcss/aspect-ratio": "^0.4.2"
+    "@tailwindcss/aspect-ratio": "^0.4.2",
+    "concurrently": "^9.1.2"
   },
   "dependencies": {
     "react-router-dom": "^7.1.1"
