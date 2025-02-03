@@ -46,7 +46,7 @@ function Navbar() {
     { path: '/calendar', label: 'Calendar' },
     { path: '/preferences', label: 'Preferences' },
     { path: '/recommendations', label: 'Recommendations' },
-    { path: '/showcase-compilation', label: 'Showcase' },
+    { path: '/showcase-compilation', label: 'Highlight' },
     { path: '/saved-videos', label: 'Saved Videos' }
   ];
 
