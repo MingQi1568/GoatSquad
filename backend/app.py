@@ -82,16 +82,7 @@ with app.app_context():
         logger.error(f"Database initialization error: {str(e)}")
         db.session.rollback()
 
-allowed_origin = os.getenv("CORS_ORIGIN", "http://localhost:3000")
-CORS(app, resources={
-    r"/*": {
-        "origins": [allowed_origin],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"],
-        "expose_headers": ["Content-Range", "X-Content-Range"],
-        "supports_credentials": True
-    }
-})
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 api = Api(app, version='1.0', 
     title='MLB Fan Feed API',
