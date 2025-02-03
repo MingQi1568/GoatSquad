@@ -1164,9 +1164,30 @@ def generate_avatar(current_user):
         with open(image_path, "rb") as image_file:
             public_url = upload_to_gcs_in_memory(image_file, "pfp_bucket", blob_name)
         
-        return jsonify({"success": True, "url": public_url}), 200
+        # Update the database with the new avatar URL
+        try:
+            current_user.avatarurl = public_url
+            db.session.commit()
+            
+            # Clean up the temporary image file
+            os.remove(image_path)
+            
+            return jsonify({
+                "success": True, 
+                "url": public_url,
+                "message": "Avatar updated successfully"
+            }), 200
+            
+        except Exception as db_error:
+            logger.error(f"Database error: {str(db_error)}")
+            db.session.rollback()
+            return jsonify({
+                "success": False,
+                "error": "Failed to update avatar in database"
+            }), 500
 
     except Exception as e:
+        logger.error(f"Avatar generation error: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/audio/previews/<filename>')
@@ -1483,6 +1504,22 @@ def handle_single_comment(current_user, comment_id):
         logger.error(f"Error handling comment: {str(e)}", exc_info=True)
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/user/profile', methods=['GET'])
+@token_required
+def get_user_profile(current_user):
+    """Get current user's profile"""
+    try:
+        return jsonify({
+            'success': True,
+            'user': current_user.to_dict()
+        })
+    except Exception as e:
+        logger.error(f"Error fetching user profile: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': 'Failed to fetch user profile'
+        }), 500
 
 if __name__ == '__main__':
     app.run(
