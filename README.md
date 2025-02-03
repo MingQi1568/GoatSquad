@@ -80,13 +80,13 @@ For any issues, please open an issue in the repository.
 
 ### Running the Application
 
-1. Start the backend:
+#### 1. Start the backend:
    ```bash
    cd backend
    python app.py
    ```
 
-2. Start the frontend:
+#### 2. Start the frontend:
    ```bash
    cd frontend
    npm run dev
@@ -95,12 +95,12 @@ For any issues, please open an issue in the repository.
 
 ### Docker Setup
 
-1. Build the Docker image:
+#### 1. Build the Docker image:
    ```bash
    docker-compose build
    ```
 
-2. Run the Docker containers:
+#### 2. Run the Docker containers:
    ```bash
    docker-compose up
    ```
