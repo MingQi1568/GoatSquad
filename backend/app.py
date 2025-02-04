@@ -468,36 +468,41 @@ def get_follow_recommendations(current_user):
         followed_teams = [team.get('name', '') for team in (current_user.followed_teams or [])]
         followed_players = [player.get('fullName', '') for player in (current_user.followed_players or [])]
 
-        if not followed_teams and not followed_players:
-            return jsonify({
-                'success': True,
-                'recommendations': [],
-                'has_more': False
-            })
-
         # Build query to get random recommendations from mlb_highlights
-        query = text("""
-            SELECT id as reel_id
-            FROM mlb_highlights 
-            WHERE home_team = ANY(:teams)
-               OR away_team = ANY(:teams)
-               OR player = ANY(:players)
-            ORDER BY random()
-            LIMIT :limit OFFSET :offset
-        """)
+        if not followed_teams and not followed_players:
+            # If no follows, return random highlights
+            query = text("""
+                SELECT id as reel_id
+                FROM mlb_highlights 
+                ORDER BY random()
+                LIMIT :limit OFFSET :offset
+            """)
+            params = {
+                'limit': per_page,
+                'offset': (page - 1) * per_page
+            }
+        else:
+            # Return highlights based on followed teams/players
+            query = text("""
+                SELECT id as reel_id
+                FROM mlb_highlights 
+                WHERE home_team = ANY(:teams)
+                   OR away_team = ANY(:teams)
+                   OR player = ANY(:players)
+                ORDER BY random()
+                LIMIT :limit OFFSET :offset
+            """)
+            params = {
+                'teams': followed_teams,
+                'players': followed_players,
+                'limit': per_page,
+                'offset': (page - 1) * per_page
+            }
 
         # Execute query with parameters
         engine = create_engine(init_connection_pool())
         with engine.connect() as connection:
-            result = connection.execute(
-                query,
-                {
-                    'teams': followed_teams,
-                    'players': followed_players,
-                    'limit': per_page,
-                    'offset': (page - 1) * per_page
-                }
-            )
+            result = connection.execute(query, params)
             recommendations = [{'reel_id': row[0]} for row in result]
 
         # Check if there are more results
