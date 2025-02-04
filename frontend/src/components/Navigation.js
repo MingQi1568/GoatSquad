@@ -1,11 +1,13 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useDarkMode } from '../hooks/useDarkMode';
 import LanguageSelector from './LanguageSelector';
 
 function Navigation() {
     const { user, logout } = useAuth();
     const location = useLocation();
+    const { isDarkMode } = useDarkMode();
 
     const isActive = (path) => {
         return location.pathname === path ? 'bg-gray-900 text-white' : 'text-gray-300 hover:bg-gray-700 hover:text-white';
@@ -17,7 +19,14 @@ function Navigation() {
                 <div className="flex items-center justify-between h-16">
                     <div className="flex items-center">
                         <div className="flex-shrink-0">
-                            <img className="h-8 w-8" src="/logo.png" alt="GoatSquad" />
+                            <img 
+                                src={isDarkMode 
+                                    ? "/images/goat_squad_logo_text_Kristen ITC_darkmode.svg"
+                                    : "/images/goat_squad_logo_text_Kristen ITC_lightmode.svg"
+                                }
+                                alt="GoatSquad"
+                                className="h-8"
+                            />
                         </div>
                         <div className="hidden md:block">
                             <div className="ml-10 flex items-baseline space-x-4">

@@ -75,11 +75,14 @@ function Login() {
 
         <div className="sm:mx-auto sm:w-full sm:max-w-md">
           {/* Logo */}
-          <div className="flex justify-center">
+          <div className="flex justify-center ml-8">
             <img
-              src="/images/logo.svg"
-              alt="Logo"
-              className={`w-48 h-24 ${isDarkMode ? 'filter invert' : ''}`}
+              src={isDarkMode 
+                ? "/images/goat_squad_logo_text_Kristen ITC_darkmode.svg"
+                : "/images/goat_squad_logo_text_Kristen ITC_lightmode.svg"
+              }
+              alt="GoatSquad"
+              className="w-[28rem] h-40"
             />
           </div>
           <h2 className={`mt-6 text-center text-3xl font-bold tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>

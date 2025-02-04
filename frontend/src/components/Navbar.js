@@ -61,16 +61,19 @@ function Navbar() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-16">
           <div className="flex">
-            <div className="flex-shrink-0 flex items-center">
+            <div className="flex-shrink-0 flex items-center ml-4">
               <Link to="/" className="flex-shrink-0 flex items-center">
                 <img 
-                  src="/images/logo.svg" 
-                  alt="Logo" 
-                  className="h-8 w-auto filter dark:invert cursor-pointer"
+                  src={isDarkMode ? 
+                    "/images/goat_squad_logo_text_Kristen ITC_darkmode.svg" : 
+                    "/images/goat_squad_logo_text_Kristen ITC_lightmode.svg"
+                  }
+                  alt="GoatSquad Logo" 
+                  className="h-16 w-auto"
                 />
               </Link>
             </div>
-            <div className="hidden sm:ml-6 sm:flex sm:space-x-8">
+            <div className="hidden sm:ml-2 sm:flex sm:space-x-8">
               {navItems.map(item => (
                 <Link
                   key={item.path}
