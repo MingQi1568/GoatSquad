@@ -10,8 +10,14 @@ import random
 
 RANDOM_TEAMS = ['New York Yankees', 'Los Angeles Dodgers', 'Chicago Cubs', 'Boston Red Sox', 'Houston Astros']
 RANDOM_PLAYERS = ['Aaron Judge', 'Mookie Betts', 'Shohei Ohtani', 'Mike Trout', 'Freddie Freeman']
-# TODO: use env variables instead.
-DATABASE_URL = "postgresql+psycopg2://postgres:vibhas69@34.71.48.54:5432/user_ratings_db"
+
+# Retrieve the database password from the environment variable
+DB_PASS = os.environ.get("DB_PASS")
+if not DB_PASS:
+    raise ValueError("The DB_PASS environment variable is not set.")
+
+# Construct the DATABASE_URL using the password from the environment variable
+DATABASE_URL = f"postgresql+psycopg2://postgres:{DB_PASS}@34.71.48.54:5432/user_ratings_db"
 
 def load_data(table):
     print("7. load_data called, directory:", os.getcwd())
@@ -39,7 +45,7 @@ def add(user_id, reel_id, rating, table):
             data.to_sql(table, connection, if_exists='append', index=False)
             print("Success with injecting data " + str(user_id) + " " + str(reel_id) + " " + str(rating) + " into " + str(table))
     except Exception as e:
-        print(f"faliure adding: {e}")
+        print(f"Failure adding: {e}")
 
 def remove(user_id, reel_id, table):
     engine = create_engine(DATABASE_URL)
@@ -183,7 +189,3 @@ if __name__ == "__main__":
     followed_teams = ['Tampa Bay Rays', 'Houston Astros']
     #print(get_follow_vid('mlb_highlights', followed_players, followed_teams))
     search_feature("embeddings", "Player: Shohei", 1)
-
-    
-
-
