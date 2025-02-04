@@ -25,8 +25,6 @@ Stay ahead of the game with real-time updates, AI-driven news digests, and immer
 ![Gemini API](https://img.shields.io/badge/Gemini_API-FF6F00?style=for-the-badge&logo=google&logoColor=white)
 ![Vertex AI](https://img.shields.io/badge/Vertex_AI-4285F4?style=for-the-badge&logo=googlecloud&logoColor=white)
 ![Google Cloud](https://img.shields.io/badge/Google_Cloud-4285F4?style=for-the-badge&logo=googlecloud&logoColor=white)
-![Vercel](https://img.shields.io/badge/Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white)
-![Cloud Run](https://img.shields.io/badge/Cloud_Run-4285F4?style=for-the-badge&logo=googlecloud&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
 ![MLB API](https://img.shields.io/badge/MLB_API-FF0000?style=for-the-badge&logo=mlb&logoColor=white)
 
