@@ -85,7 +85,7 @@ function Login() {
               className="w-[28rem] h-40"
             />
           </div>
-          <h2 className={`mt-6 text-center text-3xl font-bold tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+          <h2 className={`mt-2 text-center text-3xl font-bold tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
             Sign in to your account
           </h2>
         </div>
