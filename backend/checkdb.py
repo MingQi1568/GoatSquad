@@ -1,8 +1,13 @@
 from sqlalchemy import create_engine, text
 import os
 
-# TODO: Load database URL from environment or replace with actual connection string
-DATABASE_URL = "postgresql+psycopg2://postgres:vibhas69@34.71.48.54:5432/user_ratings_db"
+# Get the database password from the environment variable
+DB_PASS = os.environ.get("DB_PASS")
+if DB_PASS is None:
+    raise ValueError("The DB_PASS environment variable is not set.")
+
+# Construct the DATABASE_URL using the password from the environment variable
+DATABASE_URL = f"postgresql+psycopg2://postgres:{DB_PASS}@34.71.48.54:5432/user_ratings_db"
 
 # Create SQLAlchemy engine
 engine = create_engine(DATABASE_URL)
