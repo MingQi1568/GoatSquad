@@ -4,6 +4,9 @@
 
 Stay ahead of the game with real-time updates, AI-driven news digests, and immersive MLB content tailored to your favorite teams and players.
 
+**CHECK OUT OUR YOUTUBE VIDEO ON THIS PROJECT HERE**
+https://youtu.be/gWooItaeUQc?si=zfGQtN0aOb84Uo-t
+
 ---
 
 ## 🚀 **Features**
